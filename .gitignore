@@ -1,0 +1,33 @@
+# Binaries
+/guff
+/generate
+
+# Logs
+*.log
+main.log
+
+# Directories
+/lib/
+/models/
+/third_party/
+/tmp/
+
+# Go
+/vendor/
+*.test
+*.prof
+*.out
+coverage.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary
+*~
