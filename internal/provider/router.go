@@ -107,6 +107,21 @@ func (r *Router) ChatCompletionStream(ctx context.Context, req ChatRequest) (<-c
 	return p.ChatCompletionStream(ctx, req)
 }
 
+// Embed routes an embedding request to the appropriate provider.
+// The resolved provider must implement the Embedder interface.
+func (r *Router) Embed(ctx context.Context, req EmbeddingRequest) ([]EmbeddingResult, error) {
+	p, modelName, err := r.Resolve(req.Model)
+	if err != nil {
+		return nil, err
+	}
+	embedder, ok := p.(Embedder)
+	if !ok {
+		return nil, fmt.Errorf("provider %q does not support embeddings", p.Name())
+	}
+	req.Model = modelName
+	return embedder.Embed(ctx, req)
+}
+
 // ListModels returns models from all registered providers.
 func (r *Router) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	r.mu.RLock()

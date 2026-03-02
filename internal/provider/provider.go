@@ -91,3 +91,22 @@ type Provider interface {
 	// ListModels returns available models for this provider.
 	ListModels(ctx context.Context) ([]ModelInfo, error)
 }
+
+// EmbeddingRequest is the request format for embedding generation.
+type EmbeddingRequest struct {
+	Model string   `json:"model"`
+	Input []string `json:"input"`
+}
+
+// EmbeddingResult holds the output of an embedding operation.
+type EmbeddingResult struct {
+	Embedding  []float32
+	Index      int
+	TokenCount int
+}
+
+// Embedder is an optional interface for providers that support embedding generation.
+type Embedder interface {
+	// Embed generates embeddings for the given inputs.
+	Embed(ctx context.Context, req EmbeddingRequest) ([]EmbeddingResult, error)
+}

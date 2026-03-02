@@ -260,6 +260,79 @@ func (p *OpenAIProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return infos, nil
 }
 
+// openAIEmbeddingRequest is the request format for OpenAI's /v1/embeddings.
+type openAIEmbeddingRequest struct {
+	Model string   `json:"model"`
+	Input []string `json:"input"`
+}
+
+type openAIEmbeddingResponse struct {
+	Data  []struct {
+		Embedding []float32 `json:"embedding"`
+		Index     int       `json:"index"`
+	} `json:"data"`
+	Usage struct {
+		PromptTokens int `json:"prompt_tokens"`
+		TotalTokens  int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+// Embed generates embeddings via the OpenAI-compatible /v1/embeddings endpoint.
+func (p *OpenAIProvider) Embed(ctx context.Context, req EmbeddingRequest) ([]EmbeddingResult, error) {
+	oaiReq := openAIEmbeddingRequest{
+		Model: req.Model,
+		Input: req.Input,
+	}
+
+	body, err := json.Marshal(oaiReq)
+	if err != nil {
+		return nil, fmt.Errorf("marshal embedding request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if p.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("embedding request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp openAIErrorResponse
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil && errResp.Error.Message != "" {
+			return nil, fmt.Errorf("embedding error (%d): %s", resp.StatusCode, errResp.Error.Message)
+		}
+		return nil, fmt.Errorf("embedding error: status %d", resp.StatusCode)
+	}
+
+	var oaiResp openAIEmbeddingResponse
+	if err := json.NewDecoder(resp.Body).Decode(&oaiResp); err != nil {
+		return nil, fmt.Errorf("decode embedding response: %w", err)
+	}
+
+	tokensPerInput := 0
+	if len(req.Input) > 0 {
+		tokensPerInput = oaiResp.Usage.PromptTokens / len(req.Input)
+	}
+
+	results := make([]EmbeddingResult, len(oaiResp.Data))
+	for i, d := range oaiResp.Data {
+		results[i] = EmbeddingResult{
+			Embedding:  d.Embedding,
+			Index:      d.Index,
+			TokenCount: tokensPerInput,
+		}
+	}
+	return results, nil
+}
+
 func (p *OpenAIProvider) toOpenAIRequest(req ChatRequest) openAIRequest {
 	msgs := make([]openAIMessage, len(req.Messages))
 	for i, m := range req.Messages {

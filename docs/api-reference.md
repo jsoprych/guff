@@ -32,12 +32,19 @@ Chat completion with support for streaming.
 | `messages` | array | Yes | Array of `{role, content}` objects |
 | `temperature` | float | No | Sampling temperature |
 | `top_p` | float | No | Nucleus sampling threshold |
+| `top_k` | int | No | Top-k candidate count |
+| `min_p` | float | No | Min-p filtering threshold |
 | `max_tokens` | int | No | Max tokens to generate (default 1024) |
 | `max_completion_tokens` | int | No | Alias for max_tokens |
 | `stop` | string or array | No | Stop sequences |
 | `seed` | int | No | Random seed |
 | `stream` | bool | No | Enable SSE streaming |
 | `n` | int | No | Number of completions (only n=1 supported) |
+| `grammar` | string | No | GBNF grammar for constrained output (local models) |
+| `logit_bias` | object | No | Token ID (string) to bias (float) map |
+| `typical_p` | float | No | Typical sampling threshold |
+| `top_n_sigma` | float | No | Top-N-Sigma filter |
+| `dry_multiplier` | float | No | DRY anti-repetition strength |
 
 **Response (non-streaming):**
 ```json
@@ -111,7 +118,7 @@ Legacy text completion endpoint.
 
 ### POST /v1/embeddings
 
-Generate embeddings for input text.
+Generate embeddings for input text. Supports both local models and remote providers (e.g., `openai/text-embedding-3-small`).
 
 **Request:**
 ```json
@@ -121,7 +128,7 @@ Generate embeddings for input text.
 }
 ```
 
-`input` can be a string or an array of strings.
+`input` can be a string or an array of strings. For remote providers, use prefix routing (e.g., `"model": "openai/text-embedding-3-small"`).
 
 **Response:**
 ```json

@@ -20,12 +20,21 @@ type OAIChatRequest struct {
 	Messages         []OAIMessage   `json:"messages"`
 	Temperature      *float32       `json:"temperature,omitempty"`
 	TopP             *float32       `json:"top_p,omitempty"`
+	TopK             *int           `json:"top_k,omitempty"`
+	MinP             *float32       `json:"min_p,omitempty"`
 	MaxTokens        *int           `json:"max_tokens,omitempty"`
 	MaxCompletionTokens *int        `json:"max_completion_tokens,omitempty"`
 	Stop             interface{}    `json:"stop,omitempty"` // string or []string
 	Stream           bool           `json:"stream,omitempty"`
 	Seed             *int           `json:"seed,omitempty"`
 	N                int            `json:"n,omitempty"`
+
+	// Extended sampler parameters (passed through to local provider)
+	Grammar       string                `json:"grammar,omitempty"`
+	LogitBias     map[string]float32    `json:"logit_bias,omitempty"` // OAI uses string keys
+	TypicalP      *float32              `json:"typical_p,omitempty"`
+	TopNSigma     *float32              `json:"top_n_sigma,omitempty"`
+	DryMultiplier *float32              `json:"dry_multiplier,omitempty"`
 }
 
 type OAIMessage struct {
@@ -175,15 +184,34 @@ func (s *Server) handleV1ChatCompletions(w http.ResponseWriter, r *http.Request)
 		seed = &s
 	}
 
+	// Convert OAI logit_bias (string keys) to provider format (int32 keys)
+	var logitBias map[int32]float32
+	if len(req.LogitBias) > 0 {
+		logitBias = make(map[int32]float32, len(req.LogitBias))
+		for k, v := range req.LogitBias {
+			var tokenID int32
+			if _, err := fmt.Sscanf(k, "%d", &tokenID); err == nil {
+				logitBias[tokenID] = v
+			}
+		}
+	}
+
 	provReq := provider.ChatRequest{
-		Model:       req.Model,
-		Messages:    msgs,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		MaxTokens:   maxTokens,
-		Stop:        parseStop(req.Stop),
-		Seed:        seed,
-		Stream:      req.Stream,
+		Model:         req.Model,
+		Messages:      msgs,
+		Temperature:   req.Temperature,
+		TopP:          req.TopP,
+		TopK:          req.TopK,
+		MinP:          req.MinP,
+		MaxTokens:     maxTokens,
+		Stop:          parseStop(req.Stop),
+		Seed:          seed,
+		Stream:        req.Stream,
+		Grammar:       req.Grammar,
+		LogitBias:     logitBias,
+		TypicalP:      req.TypicalP,
+		TopNSigma:     req.TopNSigma,
+		DryMultiplier: req.DryMultiplier,
 	}
 
 	ctx := r.Context()
@@ -516,7 +544,42 @@ func (s *Server) handleV1Embeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load the model
+	ctx := r.Context()
+
+	// Try remote provider first (e.g., openai/text-embedding-3-small)
+	if s.engine != nil {
+		provReq := provider.EmbeddingRequest{Model: req.Model, Input: inputs}
+		results, err := s.engine.Embed(ctx, provReq)
+		if err == nil {
+			var embeddings []OAIEmbedding
+			totalTokens := 0
+			for _, res := range results {
+				embeddings = append(embeddings, OAIEmbedding{
+					Object:    "embedding",
+					Embedding: res.Embedding,
+					Index:     res.Index,
+				})
+				totalTokens += res.TokenCount
+			}
+			embResp := OAIEmbeddingResponse{
+				Object: "list",
+				Data:   embeddings,
+				Model:  req.Model,
+				Usage: OAIUsage{
+					PromptTokens: totalTokens,
+					TotalTokens:  totalTokens,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(embResp); err != nil {
+				log.Printf("write error: %v", err)
+			}
+			return
+		}
+		// Fall through to local model if remote provider doesn't support embeddings
+	}
+
+	// Local model embeddings
 	loadOpts := model.LoadOptions{
 		NumGpuLayers: s.config.Model.NumGpuLayers,
 		UseMmap:      s.config.Model.UseMmap,
@@ -532,7 +595,6 @@ func (s *Server) handleV1Embeddings(w http.ResponseWriter, r *http.Request) {
 	gen := generate.NewGenerator(loaded)
 	defer gen.Close()
 
-	ctx := r.Context()
 	var embeddings []OAIEmbedding
 	totalTokens := 0
 

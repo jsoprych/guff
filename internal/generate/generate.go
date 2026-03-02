@@ -196,6 +196,7 @@ func (g *Generator) Generate(ctx context.Context, prompt string, opts Generation
 	var generated []llama.Token
 	var result strings.Builder
 
+	var promptEvalTime time.Duration
 	promptStart := time.Now()
 	batch := llama.BatchGetOne(tokens)
 
@@ -212,11 +213,9 @@ func (g *Generator) Generate(ctx context.Context, prompt string, opts Generation
 		}
 
 		// Track prompt eval time (after first decode = prompt processing)
-		var promptEvalTime time.Duration
 		if i == 0 {
 			promptEvalTime = time.Since(promptStart)
 		}
-		_ = promptEvalTime // used in result below
 
 		// Sample next token
 		token := llama.SamplerSample(sampler, g.model.Ctx, -1)
@@ -245,14 +244,17 @@ func (g *Generator) Generate(ctx context.Context, prompt string, opts Generation
 	}
 
 	duration := time.Since(start)
+	tokenGenTime := duration - promptEvalTime
 
 	return &GenerationResult{
-		Text:         trimStopStrings(result.String(), opts.Stop),
-		Tokens:       generated,
-		PromptTokens: len(tokens),
-		GenTokens:    len(generated),
-		Duration:     duration,
-		Done:         true,
+		Text:           trimStopStrings(result.String(), opts.Stop),
+		Tokens:         generated,
+		PromptTokens:   len(tokens),
+		GenTokens:      len(generated),
+		Duration:       duration,
+		PromptEvalTime: promptEvalTime,
+		TokenGenTime:   tokenGenTime,
+		Done:           true,
 	}, nil
 }
 

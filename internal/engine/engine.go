@@ -93,6 +93,11 @@ func (e *ChatEngine) ListModels(ctx context.Context) ([]provider.ModelInfo, erro
 	return e.router.ListModels(ctx)
 }
 
+// Embed routes an embedding request through the router.
+func (e *ChatEngine) Embed(ctx context.Context, req provider.EmbeddingRequest) ([]provider.EmbeddingResult, error) {
+	return e.router.Embed(ctx, req)
+}
+
 // ToolCallResult holds the output of a single tool call iteration, used by
 // callers that need to inspect intermediate results (e.g. the chat command
 // which prints prefix text and saves messages to session storage).

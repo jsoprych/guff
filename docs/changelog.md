@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.1.4 -- Perf Timing, OAI Extended Params, Remote Embeddings (2026-03-02)
+
+### Performance Timing
+
+- `Generate()` now populates `PromptEvalTime` (time for first decode / prompt processing) and `TokenGenTime` (time for token generation after prompt eval)
+
+### OAI API Extended Parameters
+
+- `POST /v1/chat/completions` now accepts: `top_k`, `min_p`, `grammar`, `logit_bias`, `typical_p`, `top_n_sigma`, `dry_multiplier`
+- These parameters are bridged through to the local provider's sampler chain
+- `logit_bias` uses OpenAI-compatible string keys (token IDs as strings), converted to int32 internally
+
+### Remote Embeddings
+
+- New `Embedder` optional interface in `provider/` — providers that support embeddings can implement `Embed(ctx, req)`
+- `OpenAIProvider` implements `Embedder` — supports `openai/text-embedding-3-small` etc. via prefix routing
+- `POST /v1/embeddings` now tries remote provider first, falls back to local model
+- `Router.Embed()` resolves provider and checks for `Embedder` interface
+- `ChatEngine.Embed()` passes through to router
+
+---
+
 ## v0.1.3 -- Engine, UI, Samplers, Embeddings & LoRA (2026-03-02)
 
 ### Chat Engine
