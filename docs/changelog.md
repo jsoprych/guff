@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.1.2 -- Model Persistence in Serve (2026-03-01)
+
+### Model Persistence
+
+- `guff serve` now keeps models loaded in memory across API requests
+- `Load()` is idempotent -- returns cached model if already loaded, only reloads on model switch
+- `Unload()` is a no-op during serve mode (`keepLoaded` flag)
+- Pre-loads default model (or first available) at server startup
+- Clean shutdown via `ForceUnload()` on SIGTERM/SIGINT
+- **Performance**: API request latency drops from ~3-5s to <100ms (no load/unload per request)
+
+---
+
 ## v0.1.1 -- Model Metadata & Chat Templates (2026-03-01)
 
 ### Model Metadata

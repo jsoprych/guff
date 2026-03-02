@@ -50,6 +50,7 @@ type ModelManager struct {
 	registry   map[string]*ModelInfo
 	downloader *HuggingFaceDownloader
 	config     *config.Config
+	keepLoaded bool // when true, Unload() is a no-op (model stays in memory)
 }
 
 // LoadedModel represents an actively loaded model
@@ -209,7 +210,17 @@ func (m *ModelManager) Get(name string) (*ModelInfo, error) {
 	return info, nil
 }
 
-// Load loads a model by name
+// SetKeepLoaded controls whether Unload() is a no-op.
+// When true, models stay in memory across requests (used by guff serve).
+func (m *ModelManager) SetKeepLoaded(keep bool) {
+	m.mu.Lock()
+	m.keepLoaded = keep
+	m.mu.Unlock()
+}
+
+// Load loads a model by name. If the same model is already loaded, it is
+// reused without reloading (idempotent). If a different model is loaded,
+// it is unloaded first.
 func (m *ModelManager) Load(name string, opts LoadOptions) (*LoadedModel, error) {
 	// Determine library directory
 	libDir := "./lib"
@@ -219,6 +230,27 @@ func (m *ModelManager) Load(name string, opts LoadOptions) (*LoadedModel, error)
 	if err := initBackend(libDir); err != nil {
 		return nil, fmt.Errorf("backend initialization failed: %w", err)
 	}
+
+	// Fast path: if same model is already loaded, reuse it
+	m.mu.Lock()
+	if m.current != nil && m.current.Info != nil && m.current.Info.Name == name {
+		m.current.LastUsed = time.Now()
+		loaded := m.current
+		m.mu.Unlock()
+		return loaded, nil
+	}
+	// Different model requested — unload the old one
+	if m.current != nil {
+		if m.current.Ctx != 0 {
+			llama.Free(m.current.Ctx)
+		}
+		if m.current.Model != 0 {
+			llama.ModelFree(m.current.Model)
+		}
+		m.current = nil
+	}
+	m.mu.Unlock()
+
 	m.mu.RLock()
 	info, ok := m.registry[name]
 	m.mu.RUnlock()
@@ -289,8 +321,31 @@ func (m *ModelManager) Load(name string, opts LoadOptions) (*LoadedModel, error)
 	return loaded, nil
 }
 
-// Unload unloads the current model
+// Unload unloads the current model. When keepLoaded is true, this is a no-op
+// (the model stays in memory for reuse across requests).
 func (m *ModelManager) Unload() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.keepLoaded {
+		return nil
+	}
+
+	if m.current != nil {
+		if m.current.Ctx != 0 {
+			llama.Free(m.current.Ctx)
+		}
+		if m.current.Model != 0 {
+			llama.ModelFree(m.current.Model)
+		}
+		m.current = nil
+	}
+	return nil
+}
+
+// ForceUnload unloads the current model regardless of keepLoaded.
+// Used for clean shutdown.
+func (m *ModelManager) ForceUnload() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

@@ -41,13 +41,44 @@ By default, the server listens on localhost:8080.`,
 		port, _ := cmd.Flags().GetInt("port")
 		verbose, _ := cmd.Flags().GetBool("verbose")
 
-		// Create model manager
+		// Create model manager with persistence enabled
 		mm := model.NewManager(appConfig)
+		mm.SetKeepLoaded(true)
 
 		// Scan for models
 		if err := mm.ScanModels(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error scanning models: %v\n", err)
 			os.Exit(1)
+		}
+
+		// Pre-load default model if configured
+		loadOpts := model.LoadOptions{
+			NumGpuLayers: appConfig.Model.NumGpuLayers,
+			UseMmap:      appConfig.Model.UseMmap,
+			UseMlock:     appConfig.Model.UseMlock,
+		}
+		if defaultModel := appConfig.Model.DefaultModel; defaultModel != "" {
+			fmt.Printf("Pre-loading model: %s\n", defaultModel)
+			loaded, err := mm.Load(defaultModel, loadOpts)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not pre-load model %q: %v\n", defaultModel, err)
+			} else {
+				fmt.Printf("Model ready: %s (ctx=%d, layers=%d)\n",
+					loaded.Description, loaded.NCtxTrain, loaded.NLayer)
+			}
+		} else {
+			// Pre-load first available model
+			models := mm.List()
+			if len(models) > 0 {
+				fmt.Printf("Pre-loading model: %s\n", models[0].Name)
+				loaded, err := mm.Load(models[0].Name, loadOpts)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: could not pre-load model %q: %v\n", models[0].Name, err)
+				} else {
+					fmt.Printf("Model ready: %s (ctx=%d, layers=%d)\n",
+						loaded.Description, loaded.NCtxTrain, loaded.NLayer)
+				}
+			}
 		}
 
 		// Create API server
@@ -110,6 +141,7 @@ By default, the server listens on localhost:8080.`,
 		if err := srv.Shutdown(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "Server shutdown error: %v\n", err)
 		}
+		mm.ForceUnload()
 		fmt.Println("Server stopped")
 	},
 }

@@ -90,9 +90,9 @@ While GPU acceleration is automatic when drivers are present, the default config
 **Workaround:** Check `guff serve --verbose` output for GPU detection messages.
 **Future fix:** Report GPU status in `guff --version` and `/health` endpoint.
 
-### No Model Caching Across Requests
+### ~~No Model Caching Across Requests~~ (FIXED)
 
-Each API request loads and unloads the model (unless kept in memory by the manager). This is the primary latency bottleneck for the API server.
+~~Each API request loads and unloads the model.~~ `guff serve` now enables `keepLoaded` mode -- models stay in memory across requests. `Load()` is idempotent (returns the cached model if already loaded). Model switches still incur a full load/unload cycle.
 
 ## Storage
 
