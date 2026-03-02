@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"strings"
@@ -10,32 +11,36 @@ import (
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
+	"github.com/jsoprych/guff/internal/api/ui"
 	"github.com/jsoprych/guff/internal/config"
+	"github.com/jsoprych/guff/internal/engine"
 	"github.com/jsoprych/guff/internal/generate"
 	"github.com/jsoprych/guff/internal/model"
 	"github.com/jsoprych/guff/internal/provider"
 )
 
 type Server struct {
-	router         *chi.Mux
-	model          *model.ModelManager
-	config         *config.Config
-	providerRouter *provider.Router
+	router    *chi.Mux
+	model     *model.ModelManager
+	config    *config.Config
+	engine    *engine.ChatEngine
+	startedAt time.Time
 }
 
 func NewServer(mm *model.ModelManager, cfg *config.Config) *Server {
 	s := &Server{
-		router: chi.NewRouter(),
-		model:  mm,
-		config: cfg,
+		router:    chi.NewRouter(),
+		model:     mm,
+		config:    cfg,
+		startedAt: time.Now(),
 	}
 	s.setupRoutes()
 	return s
 }
 
-// SetProviderRouter sets the provider router for OpenAI-compatible endpoints.
-func (s *Server) SetProviderRouter(r *provider.Router) {
-	s.providerRouter = r
+// SetEngine sets the chat engine for all completion endpoints.
+func (s *Server) SetEngine(e *engine.ChatEngine) {
+	s.engine = e
 }
 
 func (s *Server) setupRoutes() {
@@ -61,6 +66,18 @@ func (s *Server) setupRoutes() {
 		}
 	})
 
+	// Embedded chat UI
+	uiContent, _ := fs.Sub(ui.Assets, ".")
+	r.Get("/ui", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		data, err := fs.ReadFile(uiContent, "index.html")
+		if err != nil {
+			http.Error(w, "UI not found", http.StatusInternalServerError)
+			return
+		}
+		w.Write(data)
+	})
+
 	// Ollama-compatible API routes
 	r.Route("/api", func(r chi.Router) {
 		// Model management
@@ -70,12 +87,17 @@ func (s *Server) setupRoutes() {
 		// Generation
 		r.Post("/generate", s.handleGenerate)
 		r.Post("/chat", s.handleChat)
+
+		// Dashboard endpoints
+		r.Get("/status", s.handleStatus)
+		r.Get("/tools", s.handleTools)
 	})
 
 	// OpenAI-compatible API routes
 	r.Route("/v1", func(r chi.Router) {
 		r.Post("/chat/completions", s.handleV1ChatCompletions)
 		r.Post("/completions", s.handleV1Completions)
+		r.Post("/embeddings", s.handleV1Embeddings)
 		r.Get("/models", s.handleV1Models)
 	})
 }
@@ -193,8 +215,6 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		RepeatPenalty:    s.config.Generate.RepeatPenalty,
 		FrequencyPenalty: 0.0,
 		PresencePenalty:  0.0,
-		Mirostat:         0,
-		Grammar:          "",
 		Stream:           req.Stream,
 	}
 
@@ -296,37 +316,12 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// formatChatMessages converts chat messages into a prompt string.
-// This is a simple implementation that prefixes each message with its role.
-func formatChatMessages(messages []ChatMessage) string {
-	if len(messages) == 0 {
-		return ""
-	}
-
-	var parts []string
-	for _, msg := range messages {
-		var prefix string
-		switch msg.Role {
-		case "system":
-			prefix = "System: "
-		case "assistant":
-			prefix = "Assistant: "
-		default:
-			prefix = "User: "
-		}
-		parts = append(parts, prefix+msg.Content)
-	}
-
-	// Add a final "Assistant: " prompt if the last message is not from assistant
-	lastRole := messages[len(messages)-1].Role
-	if lastRole != "assistant" {
-		parts = append(parts, "Assistant: ")
-	}
-
-	return strings.Join(parts, "\n\n")
-}
-
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	if s.engine == nil {
+		http.Error(w, "Chat engine not configured", http.StatusInternalServerError)
+		return
+	}
+
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
@@ -343,61 +338,47 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		req.Model = models[0].Name
 	}
 
-	// Load model
-	loadOpts := model.LoadOptions{
-		NumGpuLayers: s.config.Model.NumGpuLayers,
-		UseMmap:      s.config.Model.UseMmap,
-		UseMlock:     s.config.Model.UseMlock,
+	// Convert to provider messages
+	msgs := make([]provider.Message, len(req.Messages))
+	for i, m := range req.Messages {
+		msgs[i] = provider.Message{Role: m.Role, Content: m.Content}
 	}
-	loaded, err := s.model.Load(req.Model, loadOpts)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load model: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer s.model.Unload()
 
-	// Create generator
-	generator := generate.NewGenerator(loaded)
-	defer generator.Close()
-
-	// Format messages into prompt
-	prompt := formatChatMessages(req.Messages)
-
-	// Prepare generation options from config defaults
-	genOpts := generate.GenerationOptions{
-		Temperature:      s.config.Generate.Temperature,
-		TopP:             s.config.Generate.TopP,
-		TopK:             s.config.Generate.TopK,
-		MaxTokens:        s.config.Generate.MaxTokens,
-		Stop:             []string{"\n"},
-		Seed:             0,
-		RepeatPenalty:    s.config.Generate.RepeatPenalty,
-		FrequencyPenalty: 0.0,
-		PresencePenalty:  0.0,
-		Mirostat:         0,
-		Grammar:          "",
-		Stream:           req.Stream,
-	}
+	// Build provider request with config defaults
+	maxTokens := s.config.Generate.MaxTokens
+	temp := s.config.Generate.Temperature
+	topP := s.config.Generate.TopP
 
 	// Override with request options if provided
 	if req.Options != nil {
 		if req.Options.Temperature != nil {
-			genOpts.Temperature = *req.Options.Temperature
+			temp = *req.Options.Temperature
 		}
 		if req.Options.TopP != nil {
-			genOpts.TopP = *req.Options.TopP
-		}
-		if req.Options.TopK != nil {
-			genOpts.TopK = *req.Options.TopK
+			topP = *req.Options.TopP
 		}
 		if req.Options.MaxTokens != nil {
-			genOpts.MaxTokens = *req.Options.MaxTokens
+			maxTokens = *req.Options.MaxTokens
 		}
+	}
+
+	provReq := provider.ChatRequest{
+		Model:       req.Model,
+		Messages:    msgs,
+		Temperature: &temp,
+		TopP:        &topP,
+		MaxTokens:   maxTokens,
+		Stop:        []string{"\n"},
+		Stream:      req.Stream,
+	}
+
+	// Override additional options
+	if req.Options != nil {
 		if req.Options.Stop != nil {
-			genOpts.Stop = req.Options.Stop
+			provReq.Stop = req.Options.Stop
 		}
 		if req.Options.Seed != nil {
-			genOpts.Seed = *req.Options.Seed
+			provReq.Seed = req.Options.Seed
 		}
 	}
 
@@ -416,28 +397,27 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Start streaming generation
-		ch := generator.GenerateStream(ctx, prompt, genOpts)
-		var fullResponse strings.Builder
+		ch, err := s.engine.ChatCompletionStream(ctx, provReq)
+		if err != nil {
+			event := map[string]interface{}{"error": err.Error()}
+			data, _ := json.Marshal(event)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+			return
+		}
 
+		var fullResponse strings.Builder
 		for chunk := range ch {
 			if chunk.Error != nil {
-				event := map[string]interface{}{
-					"error": chunk.Error.Error(),
-				}
-				data, err := json.Marshal(event)
-				if err != nil {
-					log.Printf("json marshal error: %v", err)
-					return
-				}
+				event := map[string]interface{}{"error": chunk.Error.Error()}
+				data, _ := json.Marshal(event)
 				fmt.Fprintf(w, "data: %s\n\n", data)
 				flusher.Flush()
 				return
 			}
 
-			fullResponse.WriteString(chunk.Token)
+			fullResponse.WriteString(chunk.Delta)
 
-			// Send progress event
 			resp := ChatResponse{
 				Model:     req.Model,
 				CreatedAt: time.Now(),
@@ -462,27 +442,89 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Non-streaming generation
-	result, err := generator.Generate(ctx, prompt, genOpts)
+	// Non-streaming: use engine with tool loop
+	resp, err := s.engine.ChatCompletion(ctx, provReq)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Generation failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Prepare response
-	resp := ChatResponse{
+	chatResp := ChatResponse{
 		Model:     req.Model,
 		CreatedAt: time.Now(),
 		Message: ChatMessage{
 			Role:    "assistant",
-			Content: result.Text,
+			Content: strings.TrimSpace(resp.Message.Content),
 		},
 		Done:        true,
-		TotalTokens: result.PromptTokens + result.GenTokens,
+		TotalTokens: resp.PromptTokens + resp.GenTokens,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
+	if err := json.NewEncoder(w).Encode(chatResp); err != nil {
+		log.Printf("write error: %v", err)
+	}
+}
+
+// handleStatus returns server status for the dashboard.
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	status := map[string]interface{}{
+		"uptime": time.Since(s.startedAt).Truncate(time.Second).String(),
+	}
+
+	// Current model info
+	models := s.model.List()
+	if len(models) > 0 {
+		status["model"] = models[0].Name
+	}
+
+	// Tool count
+	toolCount := 0
+	if s.engine != nil {
+		if reg := s.engine.ToolRegistry(); reg != nil {
+			toolCount = len(reg.List())
+		}
+	}
+	status["tools_count"] = toolCount
+
+	// Provider count
+	providerCount := 0
+	if s.config != nil {
+		providerCount = len(s.config.Providers)
+	}
+	status["providers"] = providerCount
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		log.Printf("write error: %v", err)
+	}
+}
+
+// handleTools returns tool definitions for the dashboard.
+func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
+	type toolInfo struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+
+	var toolList []toolInfo
+	if s.engine != nil {
+		if reg := s.engine.ToolRegistry(); reg != nil {
+			for _, td := range reg.List() {
+				toolList = append(toolList, toolInfo{
+					Name:        td.Name,
+					Description: td.Description,
+				})
+			}
+		}
+	}
+
+	if toolList == nil {
+		toolList = []toolInfo{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{"tools": toolList}); err != nil {
 		log.Printf("write error: %v", err)
 	}
 }

@@ -46,13 +46,26 @@ type Config struct {
 
 	// Generation defaults
 	Generate struct {
-		Temperature   float32 `mapstructure:"temperature"`
-		TopP          float32 `mapstructure:"top_p"`
-		TopK          int     `mapstructure:"top_k"`
-		MinP          float32 `mapstructure:"min_p"`
-		MaxTokens     int     `mapstructure:"max_tokens"`
-		RepeatPenalty float32 `mapstructure:"repeat_penalty"`
+		Temperature    float32 `mapstructure:"temperature"`
+		TopP           float32 `mapstructure:"top_p"`
+		TopK           int     `mapstructure:"top_k"`
+		MinP           float32 `mapstructure:"min_p"`
+		MaxTokens      int     `mapstructure:"max_tokens"`
+		RepeatPenalty  float32 `mapstructure:"repeat_penalty"`
+		TypicalP       float32 `mapstructure:"typical_p"`
+		TopNSigma      float32 `mapstructure:"top_n_sigma"`
+		DryMultiplier  float32 `mapstructure:"dry_multiplier"`
+		DryBase        float32 `mapstructure:"dry_base"`
+		DryAllowedLen  int32   `mapstructure:"dry_allowed_len"`
+		DryPenaltyLast int32   `mapstructure:"dry_penalty_last"`
+		Grammar        string  `mapstructure:"grammar"`
 	} `mapstructure:"generate"`
+
+	// LoRA adapter
+	LoRA struct {
+		Path  string  `mapstructure:"path"`
+		Scale float32 `mapstructure:"scale"`
+	} `mapstructure:"lora"`
 
 	// System prompt settings (simple mode — see also Prompt for multi-part)
 	SystemPrompt struct {
@@ -134,6 +147,8 @@ func Load() (*Config, error) {
 	v.SetDefault("generate.top_k", 40)
 	v.SetDefault("generate.max_tokens", 2048)
 	v.SetDefault("generate.repeat_penalty", 1.1)
+	v.SetDefault("generate.dry_base", 1.75)
+	v.SetDefault("lora.scale", 1.0)
 
 	// Read config
 	if err := v.ReadInConfig(); err != nil {

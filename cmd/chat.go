@@ -12,8 +12,9 @@ import (
 	chatsession "github.com/jsoprych/guff/internal/chat/session"
 	chatstorage "github.com/jsoprych/guff/internal/chat/storage"
 	"github.com/jsoprych/guff/internal/config"
-	"github.com/jsoprych/guff/internal/generate"
+	"github.com/jsoprych/guff/internal/engine"
 	"github.com/jsoprych/guff/internal/model"
+	"github.com/jsoprych/guff/internal/provider"
 	"github.com/jsoprych/guff/internal/tools"
 	"github.com/spf13/cobra"
 )
@@ -43,7 +44,6 @@ Press Ctrl+D or type '/exit' to quit.`,
 		topP, _ := cmd.Flags().GetFloat32("top-p")
 		topK, _ := cmd.Flags().GetInt("top-k")
 		seed, _ := cmd.Flags().GetUint32("seed")
-		repeatPenalty, _ := cmd.Flags().GetFloat32("repeat-penalty")
 		systemFlag, _ := cmd.Flags().GetString("system")
 		systemFile, _ := cmd.Flags().GetString("system-file")
 		sessionID, _ := cmd.Flags().GetString("session")
@@ -136,10 +136,6 @@ Press Ctrl+D or type '/exit' to quit.`,
 			fmt.Fprintf(os.Stderr, "Model loaded in %v\n", loadTime)
 		}
 
-		// Create generator
-		generator := generate.NewGenerator(loaded)
-		defer generator.Close()
-
 		// Context window size from model metadata
 		contextWindowSize := loaded.NCtxTrain
 		if contextWindowSize <= 0 {
@@ -153,24 +149,15 @@ Press Ctrl+D or type '/exit' to quit.`,
 			}
 		}
 
-		// Prepare base generation options
-		genOpts := generate.GenerationOptions{
-			Temperature:      temperature,
-			TopP:             topP,
-			TopK:             topK,
-			MaxTokens:        maxTokens,
-			Stop:             []string{"\n", "User:", "user:"},
-			Seed:             seed,
-			RepeatPenalty:    repeatPenalty,
-			FrequencyPenalty: 0.0,
-			PresencePenalty:  0.0,
-			Mirostat:         0,
-			Grammar:          "",
-			Stream:           false,
-		}
-
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+
+		// Create local provider router and engine
+		localProvider := provider.NewLocalProvider(mm, loadOpts)
+		router := provider.NewRouter()
+		router.RegisterProvider(localProvider)
+		router.SetFallback(localProvider)
+		eng := engine.New(router)
 
 		// Initialize MCP tools if enabled
 		registry := tools.NewRegistry()
@@ -206,13 +193,13 @@ Press Ctrl+D or type '/exit' to quit.`,
 			}
 		}
 
-		// Inject tool descriptions into system prompt
-		if toolPrompt := registry.FormatForPrompt(); toolPrompt != "" {
-			system = system + "\n\n" + toolPrompt
+		if toolDefs := registry.List(); len(toolDefs) > 0 {
+			eng.SetToolRegistry(registry)
 		}
 
 		// Initialize chat storage and session manager if persistence enabled
 		var sessionManager *chatsession.SessionManager
+		var ctxManager *chatcontext.DefaultContextManager
 		var currentSession *chatstorage.Session
 		var tokenizer chatcontext.Tokenizer
 
@@ -239,7 +226,7 @@ Press Ctrl+D or type '/exit' to quit.`,
 			tokenizer = chatcontext.NewYzmaTokenizer(loaded.Vocab)
 
 			// Create context manager
-			ctxManager := chatcontext.NewDefaultContextManager(store, tokenizer)
+			ctxManager = chatcontext.NewDefaultContextManager(store, tokenizer)
 
 			// Create session manager
 			sessionManager = chatsession.NewSessionManager(store, ctxManager)
@@ -348,61 +335,85 @@ Press Ctrl+D or type '/exit' to quit.`,
 			}
 			if trimmed == "/status" {
 				if !noPersist && sessionManager != nil {
-					printDetailedStatus(ctx, sessionManager, sessionID, modelName, contextWindowSize, genOpts.MaxTokens)
+					printDetailedStatus(ctx, sessionManager, sessionID, modelName, contextWindowSize, maxTokens)
 				} else {
-					printNoPersistStatus(history, contextWindowSize, genOpts.MaxTokens)
+					printNoPersistStatus(history, contextWindowSize, maxTokens)
 				}
 				continue
-			}
-
-			// Add user message
-			if !noPersist && sessionManager != nil {
-				if err := sessionManager.AddMessage(ctx, sessionID, "user", userInput); err != nil {
-					fmt.Fprintf(os.Stderr, "Error saving user message: %v\n", err)
-				}
 			}
 
 			// Generate response
 			startGen := time.Now()
 			var response string
 			if !noPersist && sessionManager != nil {
-				// Use session manager for generation
-				resp, err := sessionManager.GenerateResponse(ctx, sessionID, generator, genOpts, false)
+				// Persistent path: save user message, load context, call engine
+				if err := sessionManager.AddMessage(ctx, sessionID, "user", userInput); err != nil {
+					fmt.Fprintf(os.Stderr, "Error saving user message: %v\n", err)
+				}
+
+				// Load context-managed messages from storage
+				contextBudget := contextWindowSize - maxTokens
+				if contextBudget < 256 {
+					contextBudget = 256
+				}
+				storedMsgs, err := ctxManager.GetContextMessages(ctx, sessionID, contextBudget)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error getting context: %v\n", err)
+					os.Exit(1)
+				}
+
+				// Convert to provider messages
+				msgs := make([]provider.Message, len(storedMsgs))
+				for i, m := range storedMsgs {
+					msgs[i] = provider.Message{Role: string(m.Role), Content: m.Content}
+				}
+
+				provReq := provider.ChatRequest{
+					Model:       modelName,
+					Messages:    msgs,
+					Temperature: &temperature,
+					TopP:        &topP,
+					MaxTokens:   maxTokens,
+					Stop:        []string{"\n", "User:", "user:"},
+					Stream:      false,
+				}
+				if seed != 0 {
+					provReq.Seed = &seed
+				}
+				if topK > 0 {
+					provReq.TopK = &topK
+				}
+
+				resp, err := eng.ChatCompletionWithToolCallback(ctx, provReq, func(tcr engine.ToolCallResult) error {
+					if tcr.PrefixText != "" {
+						fmt.Print(tcr.PrefixText)
+					}
+					fmt.Fprintf(os.Stderr, "\n[calling tool: %s]\n", tcr.Call.Name)
+
+					if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
+						fmt.Fprintf(os.Stderr, "[tool result: %s]\n", truncateStr(tcr.Result.Content, 200))
+					}
+
+					// Save tool result to session
+					if err := sessionManager.AddMessage(ctx, sessionID, "tool", tcr.Result.Content); err != nil {
+						fmt.Fprintf(os.Stderr, "Error saving tool result: %v\n", err)
+					}
+					return nil
+				})
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Generation error: %v\n", err)
 					os.Exit(1)
 				}
-				response = resp
 
-				// Tool call loop (max 5 iterations to prevent runaway)
-				for i := 0; i < 5; i++ {
-					call, prefixText, found := tools.ParseToolCall(response)
-					if !found {
-						break
-					}
-					if prefixText != "" {
-						fmt.Print(prefixText)
-					}
-					fmt.Fprintf(os.Stderr, "\n[calling tool: %s]\n", call.Name)
+				response = strings.TrimSpace(resp.Message.Content)
 
-					result := registry.Execute(ctx, *call)
-					if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
-						fmt.Fprintf(os.Stderr, "[tool result: %s]\n", truncateStr(result.Content, 200))
-					}
-
-					if err := sessionManager.AddMessage(ctx, sessionID, "tool", result.Content); err != nil {
-						fmt.Fprintf(os.Stderr, "Error saving tool result: %v\n", err)
-						break
-					}
-					resp, err = sessionManager.GenerateResponse(ctx, sessionID, generator, genOpts, false)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Generation error: %v\n", err)
-						break
-					}
-					response = resp
+				// Save assistant response
+				if err := sessionManager.AddMessage(ctx, sessionID, "assistant", response); err != nil {
+					fmt.Fprintf(os.Stderr, "Error saving assistant message: %v\n", err)
 				}
+
 			} else {
-				// Token-aware in-memory generation
+				// In-memory path: token-aware sliding window, call engine
 				tc := tokenizer.CountTokens(userInput)
 				history = append(history, chatHistoryMsg{role: "user", content: userInput, tokenCount: tc})
 
@@ -415,47 +426,49 @@ Press Ctrl+D or type '/exit' to quit.`,
 				// Sliding window: keep system msgs + newest non-system msgs that fit
 				history = slidingWindowTruncate(history, contextBudget)
 
-				// Build prompt from history
-				prompt := formatHistory(history)
-				if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
-					fmt.Fprintf(os.Stderr, "Prompt: %q\n", prompt)
+				// Convert history to provider messages
+				msgs := make([]provider.Message, len(history))
+				for i, m := range history {
+					msgs[i] = provider.Message{Role: m.role, Content: m.content}
 				}
 
-				// Generate response
-				result, err := generator.Generate(ctx, prompt, genOpts)
+				provReq := provider.ChatRequest{
+					Model:       modelName,
+					Messages:    msgs,
+					Temperature: &temperature,
+					TopP:        &topP,
+					MaxTokens:   maxTokens,
+					Stop:        []string{"\n", "User:", "user:"},
+					Stream:      false,
+				}
+				if seed != 0 {
+					provReq.Seed = &seed
+				}
+				if topK > 0 {
+					provReq.TopK = &topK
+				}
+
+				resp, err := eng.ChatCompletionWithToolCallback(ctx, provReq, func(tcr engine.ToolCallResult) error {
+					if tcr.PrefixText != "" {
+						fmt.Print(tcr.PrefixText)
+					}
+					fmt.Fprintf(os.Stderr, "\n[calling tool: %s]\n", tcr.Call.Name)
+
+					if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
+						fmt.Fprintf(os.Stderr, "[tool result: %s]\n", truncateStr(tcr.Result.Content, 200))
+					}
+
+					// Add tool result to in-memory history
+					toolTc := tokenizer.CountTokens(tcr.Result.Content)
+					history = append(history, chatHistoryMsg{role: "tool", content: tcr.Result.Content, tokenCount: toolTc})
+					return nil
+				})
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Generation error: %v\n", err)
 					os.Exit(1)
 				}
-				response = strings.TrimSpace(result.Text)
 
-				// Tool call loop (max 5 iterations to prevent runaway)
-				for i := 0; i < 5; i++ {
-					call, prefixText, found := tools.ParseToolCall(response)
-					if !found {
-						break
-					}
-					if prefixText != "" {
-						fmt.Print(prefixText)
-					}
-					fmt.Fprintf(os.Stderr, "\n[calling tool: %s]\n", call.Name)
-
-					toolResult := registry.Execute(ctx, *call)
-					if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
-						fmt.Fprintf(os.Stderr, "[tool result: %s]\n", truncateStr(toolResult.Content, 200))
-					}
-
-					tc := tokenizer.CountTokens(toolResult.Content)
-					history = append(history, chatHistoryMsg{role: "tool", content: toolResult.Content, tokenCount: tc})
-
-					prompt = formatHistory(history)
-					result, err = generator.Generate(ctx, prompt, genOpts)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Generation error: %v\n", err)
-						break
-					}
-					response = strings.TrimSpace(result.Text)
-				}
+				response = strings.TrimSpace(resp.Message.Content)
 
 				// Add assistant response to history
 				respTc := tokenizer.CountTokens(response)
@@ -530,27 +543,6 @@ func slidingWindowTruncate(history []chatHistoryMsg, tokenBudget int) []chatHist
 	result = append(result, systemMsgs...)
 	result = append(result, nonSystemMsgs[keepFrom:]...)
 	return result
-}
-
-// formatHistory formats in-memory history into a prompt string.
-func formatHistory(history []chatHistoryMsg) string {
-	var b strings.Builder
-	for _, msg := range history {
-		switch msg.role {
-		case "system":
-			b.WriteString("System: ")
-		case "user":
-			b.WriteString("User: ")
-		case "assistant":
-			b.WriteString("Assistant: ")
-		case "tool":
-			b.WriteString("Tool: ")
-		}
-		b.WriteString(msg.content)
-		b.WriteString("\n")
-	}
-	b.WriteString("Assistant:")
-	return b.String()
 }
 
 // printCompactStatus prints a dim one-line context status after each response.

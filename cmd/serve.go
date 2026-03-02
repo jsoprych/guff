@@ -11,8 +11,10 @@ import (
 
 	"github.com/jsoprych/guff/internal/api"
 	"github.com/jsoprych/guff/internal/config"
+	"github.com/jsoprych/guff/internal/engine"
 	"github.com/jsoprych/guff/internal/model"
 	"github.com/jsoprych/guff/internal/provider"
+	"github.com/jsoprych/guff/internal/tools"
 	"github.com/spf13/cobra"
 )
 
@@ -84,9 +86,42 @@ By default, the server listens on localhost:8080.`,
 		// Create API server
 		server := api.NewServer(mm, appConfig)
 
-		// Setup provider router
+		// Setup provider router and engine
 		router := setupProviderRouter(mm, appConfig, verbose)
-		server.SetProviderRouter(router)
+		eng := engine.New(router)
+
+		// Initialize MCP tools if enabled
+		toolsEnabled, _ := cmd.Flags().GetBool("tools")
+		var mcpClients []*tools.MCPClient
+		if toolsEnabled && len(appConfig.MCP) > 0 {
+			ctx := context.Background()
+			registry := tools.NewRegistry()
+			for name, mcpCfg := range appConfig.MCP {
+				serverCfg := tools.MCPServerConfig{
+					Name:    name,
+					Command: mcpCfg.Command,
+					Args:    mcpCfg.Args,
+					Env:     mcpCfg.Env,
+				}
+				client, err := tools.RegisterMCPTools(ctx, registry, serverCfg)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: MCP server %q failed: %v\n", name, err)
+					continue
+				}
+				mcpClients = append(mcpClients, client)
+			}
+			if toolDefs := registry.List(); len(toolDefs) > 0 {
+				eng.SetToolRegistry(registry)
+				if verbose {
+					fmt.Printf("Discovered %d tool(s) from MCP servers\n", len(toolDefs))
+					for _, td := range toolDefs {
+						fmt.Printf("  - %s: %s\n", td.Name, td.Description)
+					}
+				}
+			}
+		}
+
+		server.SetEngine(eng)
 
 		addr := fmt.Sprintf("%s:%d", host, port)
 
@@ -122,6 +157,7 @@ By default, the server listens on localhost:8080.`,
 		}()
 
 		fmt.Printf("guff server listening on %s\n", addr)
+		fmt.Printf("  Chat UI:    http://%s/ui\n", addr)
 		fmt.Printf("  Ollama API: http://%s/api/\n", addr)
 		fmt.Printf("  OpenAI API: http://%s/v1/\n", addr)
 
@@ -140,6 +176,9 @@ By default, the server listens on localhost:8080.`,
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "Server shutdown error: %v\n", err)
+		}
+		for _, c := range mcpClients {
+			c.Close()
 		}
 		mm.ForceUnload()
 		fmt.Println("Server stopped")
@@ -222,5 +261,6 @@ func setupProviderRouter(mm *model.ModelManager, cfg *config.Config, verbose boo
 func init() {
 	serveCmd.Flags().String("host", "127.0.0.1", "Host to bind to")
 	serveCmd.Flags().Int("port", 8080, "Port to listen on")
+	serveCmd.Flags().Bool("tools", true, "Enable MCP tool discovery and execution")
 	rootCmd.AddCommand(serveCmd)
 }

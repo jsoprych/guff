@@ -280,6 +280,55 @@ func (cm *DefaultContextManager) updateSessionAfterTruncation(ctx context.Contex
 	return cm.store.UpdateSession(ctx, session)
 }
 
+// GetContextMessages returns the session's messages after applying truncation
+// (same logic as GetContext), but as structured data instead of a formatted string.
+func (cm *DefaultContextManager) GetContextMessages(ctx context.Context, sessionID string, maxTokens int) ([]*storage.Message, error) {
+	session, err := cm.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if session == nil {
+		return nil, ErrSessionNotFound
+	}
+
+	messages, err := cm.store.GetMessages(ctx, sessionID, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	totalTokens := 0
+	for _, msg := range messages {
+		totalTokens += msg.TokenCount
+	}
+
+	cm.mu.Lock()
+	cm.lastBudget[sessionID] = maxTokens
+	cm.mu.Unlock()
+
+	truncated := false
+	if totalTokens > maxTokens {
+		truncated = true
+		strategy := cm.getStrategy(sessionID)
+		remaining, err := strategy.Truncate(ctx, cm.store, sessionID, messages, maxTokens)
+		if err != nil {
+			return nil, err
+		}
+		if err := cm.updateSessionAfterTruncation(ctx, sessionID, remaining); err != nil {
+			return nil, err
+		}
+		messages, err = cm.store.GetMessages(ctx, sessionID, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	cm.mu.Lock()
+	cm.truncatedAt[sessionID] = truncated
+	cm.mu.Unlock()
+
+	return messages, nil
+}
+
 func (cm *DefaultContextManager) formatMessages(messages []*storage.Message) string {
 	var formatted strings.Builder
 	for _, msg := range messages {

@@ -21,16 +21,45 @@ type GenerationOptions struct {
 	RepeatPenalty    float32
 	FrequencyPenalty float32
 	PresencePenalty  float32
-	Mirostat         int
 	Grammar          string
 	Stream           bool
+
+	// Extended samplers
+	TypicalP      float32            // SamplerInitTypical — 0 = disabled
+	TopNSigma     float32            // SamplerInitTopNSigma — 0 = disabled
+	DryMultiplier float32            // SamplerInitDry — 0 = disabled
+	DryBase       float32            // DRY base (default 1.75)
+	DryAllowedLen int32              // DRY allowed length
+	DryPenaltyLast int32             // DRY penalty lookback
+	XtcP          float32            // SamplerInitXTC probability — 0 = disabled
+	XtcT          float32            // SamplerInitXTC threshold
+	LogitBias     map[int32]float32  // SamplerInitLogitBias — nil = disabled
 }
 
 // createSamplerChain creates a sampler chain based on generation options.
-// Order matters: filters first (temp, top-k, top-p, min-p, penalties),
-// then terminal sampler last (dist for probabilistic, greedy for deterministic).
-func createSamplerChain(opts GenerationOptions) llama.Sampler {
+// Chain order: grammar (constrains candidates) → logit bias → temp → top-k →
+// top-p → typical-p → min-p → top-n-sigma → penalties → DRY → XTC →
+// terminal (dist or greedy). Filters first, terminal sampler MUST be last.
+func createSamplerChain(opts GenerationOptions, vocab llama.Vocab) llama.Sampler {
 	chain := llama.SamplerChainInit(llama.SamplerChainDefaultParams())
+
+	// Grammar-constrained generation — first, constrains candidate set
+	if opts.Grammar != "" {
+		llama.SamplerChainAdd(chain, llama.SamplerInitGrammar(vocab, opts.Grammar, "root"))
+	}
+
+	// Logit bias — direct token probability manipulation
+	if len(opts.LogitBias) > 0 {
+		biases := make([]llama.LogitBias, 0, len(opts.LogitBias))
+		for token, bias := range opts.LogitBias {
+			biases = append(biases, llama.LogitBias{Token: llama.Token(token), Bias: bias})
+		}
+		llama.SamplerChainAdd(chain, llama.SamplerInitLogitBias(
+			llama.VocabNTokens(vocab),
+			int32(len(biases)),
+			&biases[0],
+		))
+	}
 
 	// Temperature — must come before other probabilistic filters
 	if opts.Temperature > 0 {
@@ -47,14 +76,46 @@ func createSamplerChain(opts GenerationOptions) llama.Sampler {
 		llama.SamplerChainAdd(chain, llama.SamplerInitTopP(opts.TopP, 1))
 	}
 
+	// Typical-P: information-theoretic filtering
+	if opts.TypicalP > 0 {
+		llama.SamplerChainAdd(chain, llama.SamplerInitTypical(opts.TypicalP, 1))
+	}
+
 	// Min-P: discard tokens with prob < p * prob_of_top_token
 	if opts.MinP > 0 {
 		llama.SamplerChainAdd(chain, llama.SamplerInitMinP(opts.MinP, 1))
 	}
 
+	// Top-N Sigma: keep tokens within N standard deviations
+	if opts.TopNSigma > 0 {
+		llama.SamplerChainAdd(chain, llama.SamplerInitTopNSigma(opts.TopNSigma))
+	}
+
 	// Repeat/frequency/presence penalties
 	if opts.RepeatPenalty > 1.0 || opts.FrequencyPenalty != 0 || opts.PresencePenalty != 0 {
 		llama.SamplerChainAdd(chain, llama.SamplerInitPenalties(-1, opts.RepeatPenalty, opts.FrequencyPenalty, opts.PresencePenalty))
+	}
+
+	// DRY (Don't Repeat Yourself): penalizes repeated n-grams
+	if opts.DryMultiplier > 0 {
+		dryBase := opts.DryBase
+		if dryBase == 0 {
+			dryBase = 1.75
+		}
+		llama.SamplerChainAdd(chain, llama.SamplerInitDry(
+			vocab,
+			0, // nCtxTrain (0 = use model default)
+			opts.DryMultiplier,
+			dryBase,
+			opts.DryAllowedLen,
+			opts.DryPenaltyLast,
+			nil, // seq breakers
+		))
+	}
+
+	// XTC: cross-token consistency
+	if opts.XtcP > 0 {
+		llama.SamplerChainAdd(chain, llama.SamplerInitXTC(opts.XtcP, opts.XtcT, 1, opts.Seed))
 	}
 
 	// Terminal sampler — MUST be last in the chain
@@ -70,12 +131,14 @@ func createSamplerChain(opts GenerationOptions) llama.Sampler {
 }
 
 type GenerationResult struct {
-	Text         string
-	Tokens       []llama.Token
-	PromptTokens int
-	GenTokens    int
-	Duration     time.Duration
-	Done         bool
+	Text            string
+	Tokens          []llama.Token
+	PromptTokens    int
+	GenTokens       int
+	Duration        time.Duration
+	PromptEvalTime  time.Duration
+	TokenGenTime    time.Duration
+	Done            bool
 }
 
 type StreamChunk struct {
@@ -120,8 +183,11 @@ func (g *Generator) Generate(ctx context.Context, prompt string, opts Generation
 	// Clear KV cache from any previous generation
 	g.clearKVCache()
 
+	// Reset perf counters for timing
+	llama.PerfContextReset(g.model.Ctx)
+
 	// Create sampler chain for this generation
-	sampler := createSamplerChain(opts)
+	sampler := createSamplerChain(opts, g.model.Vocab)
 	defer llama.SamplerFree(sampler)
 
 	// Tokenize prompt
@@ -130,6 +196,7 @@ func (g *Generator) Generate(ctx context.Context, prompt string, opts Generation
 	var generated []llama.Token
 	var result strings.Builder
 
+	promptStart := time.Now()
 	batch := llama.BatchGetOne(tokens)
 
 	for i := 0; i < opts.MaxTokens; i++ {
@@ -144,12 +211,18 @@ func (g *Generator) Generate(ctx context.Context, prompt string, opts Generation
 			return nil, fmt.Errorf("decode error: %w", err)
 		}
 
+		// Track prompt eval time (after first decode = prompt processing)
+		var promptEvalTime time.Duration
+		if i == 0 {
+			promptEvalTime = time.Since(promptStart)
+		}
+		_ = promptEvalTime // used in result below
+
 		// Sample next token
 		token := llama.SamplerSample(sampler, g.model.Ctx, -1)
 
 		// Check for end of generation
 		if llama.VocabIsEOG(g.model.Vocab, token) {
-
 			break
 		}
 
@@ -194,7 +267,7 @@ func (g *Generator) GenerateStream(ctx context.Context, prompt string, opts Gene
 		defer close(ch)
 
 		// Create sampler chain for this generation
-		sampler := createSamplerChain(opts)
+		sampler := createSamplerChain(opts, g.model.Vocab)
 		defer llama.SamplerFree(sampler)
 
 		// Tokenize prompt

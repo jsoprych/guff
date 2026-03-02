@@ -29,6 +29,13 @@ type ChatRequest struct {
 	Seed        *uint32   `json:"seed,omitempty"`
 	Stream      bool      `json:"stream,omitempty"`
 
+	// Extended sampler parameters (used by local provider)
+	TypicalP      *float32           `json:"typical_p,omitempty"`
+	TopNSigma     *float32           `json:"top_n_sigma,omitempty"`
+	DryMultiplier *float32           `json:"dry_multiplier,omitempty"`
+	Grammar       string             `json:"grammar,omitempty"`
+	LogitBias     map[int32]float32  `json:"logit_bias,omitempty"`
+
 	// Tool calling fields (used by providers that support function calling)
 	Tools    []Tool `json:"tools,omitempty"`
 	ToolCall bool   `json:"tool_call,omitempty"` // hint that tool use is expected

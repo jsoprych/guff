@@ -64,13 +64,34 @@ type LoadedModel struct {
 	mu            sync.Mutex
 
 	// Metadata read from the model after loading
-	NCtxTrain     int    // context window size from training
-	NEmbd         int    // embedding dimension
-	NLayer        int    // number of transformer layers
-	NHead         int    // number of attention heads
-	Description   string // model description string
+	NCtxTrain      int    // context window size from training
+	NEmbd          int    // embedding dimension
+	NLayer         int    // number of transformer layers
+	NHead          int    // number of attention heads
+	VocabSize      int    // number of tokens in vocabulary
+	Description    string // model description string
 	ModelSizeBytes uint64 // total tensor size in bytes
-	ChatTemplate  string // chat template from GGUF metadata
+	ChatTemplate   string // chat template from GGUF metadata
+
+	// LoRA adapter (nil if none loaded)
+	LoraAdapter    llama.AdapterLora
+	loraLoaded     bool
+}
+
+// GetMetadata returns a model metadata value by key. Returns empty string if not found.
+func (lm *LoadedModel) GetMetadata(key string) string {
+	val, _ := llama.ModelMetaValStr(lm.Model, key)
+	return val
+}
+
+// HasEncoder returns true if the model has an encoder (e.g. for embeddings).
+func (lm *LoadedModel) HasEncoder() bool {
+	return llama.ModelHasEncoder(lm.Model)
+}
+
+// IsRecurrent returns true if the model is recurrent (e.g. Mamba/RWKV).
+func (lm *LoadedModel) IsRecurrent() bool {
+	return llama.ModelIsRecurrent(lm.Model)
 }
 
 // ModelInfo contains metadata about a model
@@ -241,12 +262,7 @@ func (m *ModelManager) Load(name string, opts LoadOptions) (*LoadedModel, error)
 	}
 	// Different model requested — unload the old one
 	if m.current != nil {
-		if m.current.Ctx != 0 {
-			llama.Free(m.current.Ctx)
-		}
-		if m.current.Model != 0 {
-			llama.ModelFree(m.current.Model)
-		}
+		m.freeModel(m.current)
 		m.current = nil
 	}
 	m.mu.Unlock()
@@ -295,6 +311,12 @@ func (m *ModelManager) Load(name string, opts LoadOptions) (*LoadedModel, error)
 	// Read chat template from GGUF metadata
 	chatTemplate := llama.ModelChatTemplate(model, "")
 
+	// Warmup — trigger GPU kernel JIT compilation
+	if err := llama.Warmup(ctx, model); err != nil {
+		// Non-fatal: warmup failure shouldn't prevent model loading
+		fmt.Printf("Warning: model warmup failed: %v\n", err)
+	}
+
 	loaded := &LoadedModel{
 		Model:          model,
 		Ctx:            ctx,
@@ -306,9 +328,27 @@ func (m *ModelManager) Load(name string, opts LoadOptions) (*LoadedModel, error)
 		NEmbd:          int(llama.ModelNEmbd(model)),
 		NLayer:         int(llama.ModelNLayer(model)),
 		NHead:          int(llama.ModelNHead(model)),
+		VocabSize:      int(llama.VocabNTokens(vocab)),
 		Description:    llama.ModelDesc(model),
 		ModelSizeBytes: llama.ModelSize(model),
 		ChatTemplate:   chatTemplate,
+	}
+
+	// Load LoRA adapter if configured
+	if m.config != nil && m.config.LoRA.Path != "" {
+		adapter, err := llama.AdapterLoraInit(model, m.config.LoRA.Path)
+		if err != nil {
+			// Non-fatal: LoRA failure shouldn't prevent model loading
+			fmt.Printf("Warning: LoRA adapter failed to load: %v\n", err)
+		} else {
+			scale := m.config.LoRA.Scale
+			if scale == 0 {
+				scale = 1.0
+			}
+			llama.SetAdaptersLora(ctx, []llama.AdapterLora{adapter}, []float32{scale})
+			loaded.LoraAdapter = adapter
+			loaded.loraLoaded = true
+		}
 	}
 
 	// Update the registry info with real metadata
@@ -332,12 +372,7 @@ func (m *ModelManager) Unload() error {
 	}
 
 	if m.current != nil {
-		if m.current.Ctx != 0 {
-			llama.Free(m.current.Ctx)
-		}
-		if m.current.Model != 0 {
-			llama.ModelFree(m.current.Model)
-		}
+		m.freeModel(m.current)
 		m.current = nil
 	}
 	return nil
@@ -350,15 +385,23 @@ func (m *ModelManager) ForceUnload() error {
 	defer m.mu.Unlock()
 
 	if m.current != nil {
-		if m.current.Ctx != 0 {
-			llama.Free(m.current.Ctx)
-		}
-		if m.current.Model != 0 {
-			llama.ModelFree(m.current.Model)
-		}
+		m.freeModel(m.current)
 		m.current = nil
 	}
 	return nil
+}
+
+// freeModel releases all resources for a loaded model.
+func (m *ModelManager) freeModel(lm *LoadedModel) {
+	if lm.loraLoaded {
+		llama.AdapterLoraFree(lm.LoraAdapter)
+	}
+	if lm.Ctx != 0 {
+		llama.Free(lm.Ctx)
+	}
+	if lm.Model != 0 {
+		llama.ModelFree(lm.Model)
+	}
 }
 
 // Pull downloads a model from Hugging Face

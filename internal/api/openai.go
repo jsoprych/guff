@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jsoprych/guff/internal/generate"
+	"github.com/jsoprych/guff/internal/model"
 	"github.com/jsoprych/guff/internal/provider"
 )
 
@@ -138,8 +140,8 @@ func oaiError(w http.ResponseWriter, status int, msg, errType string) {
 
 // handleV1ChatCompletions handles POST /v1/chat/completions
 func (s *Server) handleV1ChatCompletions(w http.ResponseWriter, r *http.Request) {
-	if s.router == nil {
-		oaiError(w, http.StatusInternalServerError, "provider router not configured", "server_error")
+	if s.engine == nil {
+		oaiError(w, http.StatusInternalServerError, "chat engine not configured", "server_error")
 		return
 	}
 
@@ -191,8 +193,8 @@ func (s *Server) handleV1ChatCompletions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Non-streaming
-	resp, err := s.providerRouter.ChatCompletion(ctx, provReq)
+	// Non-streaming — engine handles tool loop
+	resp, err := s.engine.ChatCompletion(ctx, provReq)
 	if err != nil {
 		oaiError(w, http.StatusInternalServerError, err.Error(), "server_error")
 		return
@@ -225,7 +227,7 @@ func (s *Server) handleV1ChatCompletions(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleV1ChatCompletionsStream(w http.ResponseWriter, ctx context.Context, model string, req provider.ChatRequest) {
-	ch, err := s.providerRouter.ChatCompletionStream(ctx, req)
+	ch, err := s.engine.ChatCompletionStream(ctx, req)
 	if err != nil {
 		oaiError(w, http.StatusInternalServerError, err.Error(), "server_error")
 		return
@@ -294,8 +296,8 @@ func (s *Server) handleV1ChatCompletionsStream(w http.ResponseWriter, ctx contex
 func (s *Server) handleV1Models(w http.ResponseWriter, r *http.Request) {
 	var models []OAIModel
 
-	if s.providerRouter != nil {
-		infos, err := s.providerRouter.ListModels(r.Context())
+	if s.engine != nil {
+		infos, err := s.engine.ListModels(r.Context())
 		if err == nil {
 			for _, m := range infos {
 				models = append(models, OAIModel{
@@ -338,8 +340,8 @@ func (s *Server) handleV1Models(w http.ResponseWriter, r *http.Request) {
 
 // handleV1Completions handles POST /v1/completions (legacy completions endpoint)
 func (s *Server) handleV1Completions(w http.ResponseWriter, r *http.Request) {
-	if s.providerRouter == nil {
-		oaiError(w, http.StatusInternalServerError, "provider router not configured", "server_error")
+	if s.engine == nil {
+		oaiError(w, http.StatusInternalServerError, "chat engine not configured", "server_error")
 		return
 	}
 
@@ -380,7 +382,7 @@ func (s *Server) handleV1Completions(w http.ResponseWriter, r *http.Request) {
 
 	if req.Stream {
 		// Streaming completions
-		ch, err := s.providerRouter.ChatCompletionStream(ctx, provReq)
+		ch, err := s.engine.ChatCompletionStream(ctx, provReq)
 		if err != nil {
 			oaiError(w, http.StatusInternalServerError, err.Error(), "server_error")
 			return
@@ -428,7 +430,7 @@ func (s *Server) handleV1Completions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Non-streaming
-	resp, err := s.providerRouter.ChatCompletion(ctx, provReq)
+	resp, err := s.engine.ChatCompletion(ctx, provReq)
 	if err != nil {
 		oaiError(w, http.StatusInternalServerError, err.Error(), "server_error")
 		return
@@ -456,6 +458,110 @@ func (s *Server) handleV1Completions(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(oaiResp); err != nil {
+		log.Printf("write error: %v", err)
+	}
+}
+
+// OpenAI embeddings types
+
+type OAIEmbeddingRequest struct {
+	Model string      `json:"model"`
+	Input interface{} `json:"input"` // string or []string
+}
+
+type OAIEmbeddingResponse struct {
+	Object string         `json:"object"`
+	Data   []OAIEmbedding `json:"data"`
+	Model  string         `json:"model"`
+	Usage  OAIUsage       `json:"usage"`
+}
+
+type OAIEmbedding struct {
+	Object    string    `json:"object"`
+	Embedding []float32 `json:"embedding"`
+	Index     int       `json:"index"`
+}
+
+// handleV1Embeddings handles POST /v1/embeddings
+func (s *Server) handleV1Embeddings(w http.ResponseWriter, r *http.Request) {
+	var req OAIEmbeddingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		oaiError(w, http.StatusBadRequest, fmt.Sprintf("invalid request: %v", err), "invalid_request_error")
+		return
+	}
+
+	if req.Model == "" {
+		oaiError(w, http.StatusBadRequest, "model is required", "invalid_request_error")
+		return
+	}
+
+	// Parse input — can be string or []string
+	var inputs []string
+	switch v := req.Input.(type) {
+	case string:
+		inputs = []string{v}
+	case []interface{}:
+		for _, item := range v {
+			if str, ok := item.(string); ok {
+				inputs = append(inputs, str)
+			}
+		}
+	default:
+		oaiError(w, http.StatusBadRequest, "input must be string or array of strings", "invalid_request_error")
+		return
+	}
+
+	if len(inputs) == 0 {
+		oaiError(w, http.StatusBadRequest, "input is empty", "invalid_request_error")
+		return
+	}
+
+	// Load the model
+	loadOpts := model.LoadOptions{
+		NumGpuLayers: s.config.Model.NumGpuLayers,
+		UseMmap:      s.config.Model.UseMmap,
+		UseMlock:     s.config.Model.UseMlock,
+	}
+	loaded, err := s.model.Load(req.Model, loadOpts)
+	if err != nil {
+		oaiError(w, http.StatusInternalServerError, fmt.Sprintf("failed to load model: %v", err), "server_error")
+		return
+	}
+	defer s.model.Unload()
+
+	gen := generate.NewGenerator(loaded)
+	defer gen.Close()
+
+	ctx := r.Context()
+	var embeddings []OAIEmbedding
+	totalTokens := 0
+
+	for i, input := range inputs {
+		result, err := gen.Embed(ctx, input)
+		if err != nil {
+			oaiError(w, http.StatusInternalServerError, fmt.Sprintf("embedding failed: %v", err), "server_error")
+			return
+		}
+		embeddings = append(embeddings, OAIEmbedding{
+			Object:    "embedding",
+			Embedding: result.Embedding,
+			Index:     i,
+		})
+		totalTokens += result.TokenCount
+	}
+
+	embResp := OAIEmbeddingResponse{
+		Object: "list",
+		Data:   embeddings,
+		Model:  req.Model,
+		Usage: OAIUsage{
+			PromptTokens: totalTokens,
+			TotalTokens:  totalTokens,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(embResp); err != nil {
 		log.Printf("write error: %v", err)
 	}
 }

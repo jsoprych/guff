@@ -219,5 +219,24 @@ func toGenOpts(req ChatRequest) generate.GenerationOptions {
 	if req.Seed != nil {
 		opts.Seed = *req.Seed
 	}
+
+	// Extended sampler parameters
+	if req.TypicalP != nil {
+		opts.TypicalP = *req.TypicalP
+	}
+	if req.TopNSigma != nil {
+		opts.TopNSigma = *req.TopNSigma
+	}
+	if req.DryMultiplier != nil {
+		opts.DryMultiplier = *req.DryMultiplier
+		opts.DryBase = 1.75 // sensible default
+	}
+	if req.Grammar != "" {
+		opts.Grammar = req.Grammar
+	}
+	if req.LogitBias != nil {
+		opts.LogitBias = req.LogitBias
+	}
+
 	return opts
 }

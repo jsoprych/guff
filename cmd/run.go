@@ -117,8 +117,6 @@ The model must already be downloaded (use 'guff pull' first).`,
 			RepeatPenalty:    repeatPenalty,
 			FrequencyPenalty: 0.0,
 			PresencePenalty:  0.0,
-			Mirostat:         0,
-			Grammar:          "",
 			Stream:           stream,
 		}
 
