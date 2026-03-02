@@ -4,14 +4,20 @@ guff tracks token usage across conversation turns and automatically manages the 
 
 ## Architecture
 
-```
-SessionManager
-  |-- contextSize (e.g., 2048)
-  |-- ContextManager
-        |-- Tokenizer (yzma vocabulary-based)
-        |-- Storage (SQLite)
-        |-- strategies map[sessionID]ContextStrategy
-        |-- status tracking (lastBudget, truncatedAt)
+```mermaid
+graph TD
+    SM["SessionManager<br/>contextSize from model metadata"]
+    CM["ContextManager"]
+    TOK["Tokenizer<br/>yzma vocabulary-based"]
+    STORE["Storage<br/>SQLite"]
+    STRAT["strategies map<br/>sessionID → ContextStrategy"]
+    STATUS["Status Tracking<br/>lastBudget, truncatedAt"]
+
+    SM --> CM
+    CM --> TOK
+    CM --> STORE
+    CM --> STRAT
+    CM --> STATUS
 ```
 
 ## Context Budget Calculation

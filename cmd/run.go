@@ -98,6 +98,8 @@ The model must already be downloaded (use 'guff pull' first).`,
 		loadTime := time.Since(startLoad)
 		if verbose {
 			fmt.Fprintf(os.Stderr, "Model loaded in %v\n", loadTime)
+			fmt.Fprintf(os.Stderr, "Model: %s (ctx=%d, layers=%d, embd=%d)\n",
+				loaded.Description, loaded.NCtxTrain, loaded.NLayer, loaded.NEmbd)
 		}
 
 		// Create generator

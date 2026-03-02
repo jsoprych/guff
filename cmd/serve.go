@@ -64,7 +64,7 @@ By default, the server listens on localhost:8080.`,
 			models := mm.List()
 			fmt.Printf("Local models: %d\n", len(models))
 			for _, m := range models {
-				fmt.Printf("  • %s (%s)\n", m.Name, m.Quantization)
+				fmt.Printf("  • %s (%s, ctx=%d)\n", m.Name, m.Quantization, m.ContextLen)
 			}
 			if len(appConfig.Providers) > 0 {
 				fmt.Printf("Remote providers: %d\n", len(appConfig.Providers))

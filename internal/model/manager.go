@@ -54,13 +54,22 @@ type ModelManager struct {
 
 // LoadedModel represents an actively loaded model
 type LoadedModel struct {
-	Model    llama.Model
-	Ctx      llama.Context
-	Vocab    llama.Vocab
-	Info     *ModelInfo
-	LoadedAt time.Time
-	LastUsed time.Time
-	mu       sync.Mutex
+	Model         llama.Model
+	Ctx           llama.Context
+	Vocab         llama.Vocab
+	Info          *ModelInfo
+	LoadedAt      time.Time
+	LastUsed      time.Time
+	mu            sync.Mutex
+
+	// Metadata read from the model after loading
+	NCtxTrain     int    // context window size from training
+	NEmbd         int    // embedding dimension
+	NLayer        int    // number of transformer layers
+	NHead         int    // number of attention heads
+	Description   string // model description string
+	ModelSizeBytes uint64 // total tensor size in bytes
+	ChatTemplate  string // chat template from GGUF metadata
 }
 
 // ModelInfo contains metadata about a model
@@ -233,9 +242,15 @@ func (m *ModelManager) Load(name string, opts LoadOptions) (*LoadedModel, error)
 		return nil, fmt.Errorf("failed to load model: %w", err)
 	}
 
-	// Create context with default parameters
+	// Read model metadata
+	nCtxTrain := int(llama.ModelNCtxTrain(model))
+	if nCtxTrain <= 0 {
+		nCtxTrain = 2048 // fallback
+	}
+
+	// Create context using the model's trained context size
 	ctxParams := llama.ContextDefaultParams()
-	ctxParams.NCtx = 2048 // default context size
+	ctxParams.NCtx = uint32(nCtxTrain)
 
 	ctx, err := llama.InitFromModel(model, ctxParams)
 	if err != nil {
@@ -244,14 +259,28 @@ func (m *ModelManager) Load(name string, opts LoadOptions) (*LoadedModel, error)
 	}
 
 	vocab := llama.ModelGetVocab(model)
+
+	// Read chat template from GGUF metadata
+	chatTemplate := llama.ModelChatTemplate(model, "")
+
 	loaded := &LoadedModel{
-		Model:    model,
-		Ctx:      ctx,
-		Vocab:    vocab,
-		Info:     info,
-		LoadedAt: time.Now(),
-		LastUsed: time.Now(),
+		Model:          model,
+		Ctx:            ctx,
+		Vocab:          vocab,
+		Info:           info,
+		LoadedAt:       time.Now(),
+		LastUsed:       time.Now(),
+		NCtxTrain:      nCtxTrain,
+		NEmbd:          int(llama.ModelNEmbd(model)),
+		NLayer:         int(llama.ModelNLayer(model)),
+		NHead:          int(llama.ModelNHead(model)),
+		Description:    llama.ModelDesc(model),
+		ModelSizeBytes: llama.ModelSize(model),
+		ChatTemplate:   chatTemplate,
 	}
+
+	// Update the registry info with real metadata
+	info.ContextLen = nCtxTrain
 
 	m.mu.Lock()
 	m.current = loaded

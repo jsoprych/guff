@@ -17,6 +17,22 @@ type Provider interface {
 
 ## Model Resolution
 
+```mermaid
+flowchart TD
+    REQ["Incoming model name"]
+    ROUTE{"Route table<br/>lookup"}
+    PREFIX{"Provider prefix<br/>syntax?"}
+    FALLBACK["Fallback<br/>local llama.cpp"]
+    FOUND["Provider + model resolved"]
+
+    REQ --> ROUTE
+    ROUTE -->|"match (e.g. sonnet)"| FOUND
+    ROUTE -->|"no match"| PREFIX
+    PREFIX -->|"provider/model<br/>(e.g. openai/gpt-4o)"| FOUND
+    PREFIX -->|"no prefix"| FALLBACK
+    FALLBACK --> FOUND
+```
+
 The Router resolves model names in this order:
 
 1. **Explicit route table** -- configured aliases (e.g., `sonnet` -> `anthropic/claude-sonnet-4-5-20250929`)
@@ -37,7 +53,7 @@ guff chat --model sonnet                  # route alias (if configured)
 
 Wraps the llama.cpp model manager and generator. Always registered as the fallback provider.
 
-- Messages formatted as `System: ...\nUser: ...\nAssistant:` prompt
+- Uses GGUF chat templates when available (ChatML, Llama-style, etc.), falls back to `System: ...\nUser: ...\nAssistant:` format
 - Supports all generation parameters (temperature, top-p/k, min-p, penalties, seed)
 - Model loaded on each request, unloaded after completion
 

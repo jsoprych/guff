@@ -16,19 +16,13 @@
 
 **Workaround:** Use a chat-tuned model, or set a system prompt that guides output format.
 
-### Context Window Detection
+### ~~Context Window Detection~~ (FIXED)
 
-**Context window size is hardcoded to 2048.** guff does not yet read `n_ctx_train` from model metadata via yzma, even though the API exists (`llama.NCtxTrain(model)`).
+~~Context window size was hardcoded to 2048.~~ Now reads `n_ctx_train` from model metadata via yzma at load time. Models with larger context windows are automatically detected and used.
 
-**Impact:** Models with larger context windows (4096, 8192, etc.) are artificially limited.
-**Workaround:** None currently. This is a high-priority fix.
+### ~~Chat Template~~ (FIXED)
 
-### Chat Template
-
-**No model-specific chat templates.** Messages are formatted as simple `Role: content\n` text. Models that expect specific templates (ChatML, Llama-style, etc.) may produce degraded output.
-
-**Workaround:** Use `--system` to guide the model's behavior.
-**Future fix:** Read chat template from GGUF metadata.
+~~No model-specific chat templates.~~ Now reads the chat template from GGUF metadata and applies it via `llama.ChatApplyTemplate()`. Falls back to simple `Role: content` format only if no template is found in the model.
 
 ## Sampling
 
@@ -116,7 +110,8 @@ guff uses approximately 43 of yzma's 180+ exported functions. Major unused capab
 
 | Feature | Yzma Function | Status |
 |---------|---------------|--------|
-| Model metadata | `NCtxTrain`, `NEmbd`, `NLayer`, `ModelDesc` | Not used |
+| Model metadata | `NCtxTrain`, `NEmbd`, `NLayer`, `ModelDesc` | **Used** (v0.1.1) |
+| Chat templates | `ModelChatTemplate`, `ChatApplyTemplate` | **Used** (v0.1.1) |
 | GGUF key-value metadata | `ModelMetaValStr`, `ModelMetaCount` | Not used |
 | Embeddings | `Encode`, `GetEmbeddings` | Not used |
 | Grammar constraints | `SamplerInitGrammar` | Not used |

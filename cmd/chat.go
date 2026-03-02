@@ -139,8 +139,18 @@ Press Ctrl+D or type '/exit' to quit.`,
 		generator := generate.NewGenerator(loaded)
 		defer generator.Close()
 
-		// Context window size from model (default 2048)
-		contextWindowSize := 2048
+		// Context window size from model metadata
+		contextWindowSize := loaded.NCtxTrain
+		if contextWindowSize <= 0 {
+			contextWindowSize = 2048
+		}
+		if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
+			fmt.Fprintf(os.Stderr, "Model: %s (ctx=%d, layers=%d, embd=%d)\n",
+				loaded.Description, contextWindowSize, loaded.NLayer, loaded.NEmbd)
+			if loaded.ChatTemplate != "" {
+				fmt.Fprintf(os.Stderr, "Chat template: available (%d chars)\n", len(loaded.ChatTemplate))
+			}
+		}
 
 		// Prepare base generation options
 		genOpts := generate.GenerationOptions{

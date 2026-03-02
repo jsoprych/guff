@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.1.1 -- Model Metadata & Chat Templates (2026-03-01)
+
+### Model Metadata
+
+- Read model metadata from GGUF via yzma at load time: `NCtxTrain`, `NEmbd`, `NLayer`, `NHead`, `ModelDesc`, `ModelSize`, `ChatTemplate`
+- Context window size now auto-detected from model instead of hardcoded 2048
+- Verbose output shows full model metadata (context length, layers, embedding dimensions)
+
+### Chat Templates
+
+- Auto-detect and apply chat templates from GGUF model metadata
+- Uses `llama.ChatApplyTemplate()` for proper template rendering (ChatML, Llama-style, etc.)
+- Graceful fallback to simple `Role: content` format when no template is present
+
+### Documentation
+
+- Added mermaid diagrams to architecture docs (system overview, data flows)
+- Updated known issues: context window detection and chat template now resolved
+
+---
+
 ## v0.1.0 -- Community Edition MVP (2026-03-01)
 
 Initial release of guff Community Edition.

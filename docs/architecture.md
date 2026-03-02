@@ -2,28 +2,41 @@
 
 ## System Overview
 
-```
-                    CLI Commands
-                   (pull/run/chat/serve)
-                         |
-                    cmd/ package
-                         |
-          +--------------+--------------+
-          |              |              |
-     model/         generate/      chat/
-   (lifecycle)    (inference)    (sessions)
-          |              |              |
-          +----- llama.cpp (via yzma) --+
-                         |
-                  provider/  (routing)
-                 /    |    \
-            local  openai  anthropic
-                         |
-                    tools/  (MCP + registry)
-                         |
-                    api/  (HTTP server)
-                   /          \
-              Ollama API    OpenAI API
+```mermaid
+graph TD
+    CLI["CLI Commands<br/>pull / run / chat / serve"]
+    CMD["cmd/ package"]
+    MODEL["model/<br/>lifecycle + metadata"]
+    GEN["generate/<br/>inference + sampler chain"]
+    CHAT["chat/<br/>sessions + context"]
+    YZMA["llama.cpp via yzma FFI"]
+    PROV["provider/ routing"]
+    LOCAL["Local<br/>llama.cpp"]
+    OAI["OpenAI<br/>DeepSeek / Groq"]
+    ANT["Anthropic"]
+    TOOLS["tools/<br/>MCP + registry"]
+    API["api/ HTTP server"]
+    OLLAMA["Ollama API<br/>/api/*"]
+    OPENAI["OpenAI API<br/>/v1/*"]
+    PROMPT["prompt/<br/>builder"]
+
+    CLI --> CMD
+    CMD --> MODEL
+    CMD --> GEN
+    CMD --> CHAT
+    MODEL --> YZMA
+    GEN --> YZMA
+    CHAT --> PROV
+    PROV --> LOCAL
+    PROV --> OAI
+    PROV --> ANT
+    LOCAL --> YZMA
+    CMD --> API
+    API --> OLLAMA
+    API --> OPENAI
+    API --> PROV
+    TOOLS --> PROV
+    PROMPT --> CMD
 ```
 
 ## Package Map
@@ -133,35 +146,56 @@ Viper-based with YAML, XDG directories, `GUFF_` env prefix.
 
 ## Data Flow: Chat Request
 
-```
-User input
-  -> cmd/chat.go
-  -> SessionManager.AddMessage() [stores in SQLite, counts tokens]
-  -> SessionManager.GenerateResponse()
-     -> ContextManager.GetContext(sessionID, contextBudget)
-        -> Load messages from storage
-        -> Apply ContextStrategy.Truncate() if over budget
-        -> Format messages into prompt string
-     -> Generator.Generate(ctx, prompt, opts)
-        -> createSamplerChain(opts) [temp -> top-k -> top-p -> min-p -> penalties -> dist/greedy]
-        -> llama.Decode() + llama.SamplerSample() loop
-     -> Store assistant response
-  -> Display response + compact status line
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as cmd/chat.go
+    participant SM as SessionManager
+    participant CM as ContextManager
+    participant G as Generator
+    participant L as llama.cpp
+
+    U->>C: User input
+    C->>SM: AddMessage(user, text)
+    SM->>CM: Store in SQLite + count tokens
+    C->>SM: GenerateResponse()
+    SM->>CM: GetContext(sessionID, contextBudget)
+    CM->>CM: Load messages, apply Strategy.Truncate()
+    CM-->>SM: Formatted prompt string
+    SM->>G: Generate(ctx, prompt, opts)
+    G->>G: createSamplerChain (temp→top-k→top-p→min-p→penalties→dist)
+    G->>L: Decode + SamplerSample loop
+    L-->>G: Generated tokens
+    G-->>SM: GenerationResult
+    SM->>CM: Store assistant response
+    SM-->>C: Response text
+    C->>U: Display response + context status
 ```
 
 ## Data Flow: API Request (OpenAI-compatible)
 
-```
-HTTP POST /v1/chat/completions
-  -> api/Server.handleV1ChatCompletions()
-  -> Parse OAIChatRequest, convert to provider.ChatRequest
-  -> provider.Router.Resolve(model)
-     -> Route table / prefix / fallback
-  -> Provider.ChatCompletion() or ChatCompletionStream()
-     -> Local: load model, generate, unload
-     -> OpenAI: HTTP POST to api.openai.com/v1/chat/completions
-     -> Anthropic: HTTP POST to api.anthropic.com/v1/messages (format translation)
-  -> Convert to OAIChatResponse, write JSON (or SSE stream)
+```mermaid
+sequenceDiagram
+    participant Client as HTTP Client
+    participant API as api/Server
+    participant R as provider/Router
+    participant P as Provider
+
+    Client->>API: POST /v1/chat/completions
+    API->>API: Parse OAIChatRequest
+    API->>R: Router.Resolve(model)
+    R->>R: Route table → prefix → fallback
+    R-->>API: Provider + actual model name
+    API->>P: ChatCompletion(req)
+    alt Local Provider
+        P->>P: Load model, apply chat template, generate
+    else OpenAI/DeepSeek
+        P->>P: HTTP POST api.openai.com/v1/chat/completions
+    else Anthropic
+        P->>P: Translate to Messages API format
+    end
+    P-->>API: ChatResponse
+    API-->>Client: OAIChatResponse (JSON or SSE stream)
 ```
 
 ## Thread Safety

@@ -6,8 +6,16 @@ guff uses llama.cpp's sampler chain system (via yzma) to control text generation
 
 The chain is built in `internal/generate/generate.go:createSamplerChain()`:
 
-```
-Temperature -> Top-K -> Top-P -> Min-P -> Penalties -> Terminal (Dist or Greedy)
+```mermaid
+flowchart LR
+    LOGITS["Raw Logits"] --> TEMP["Temperature<br/>scale randomness"]
+    TEMP --> TOPK["Top-K<br/>keep K most probable"]
+    TOPK --> TOPP["Top-P<br/>nucleus sampling"]
+    TOPP --> MINP["Min-P<br/>relative threshold"]
+    MINP --> PEN["Penalties<br/>repeat/freq/presence"]
+    PEN --> TERM{"temp > 0?"}
+    TERM -->|"Yes"| DIST["SamplerInitDist<br/>probabilistic"]
+    TERM -->|"No"| GREEDY["SamplerInitGreedy<br/>deterministic"]
 ```
 
 **Order matters.** Each sampler filters or transforms the token probability distribution, and the terminal sampler makes the final selection. Putting the terminal sampler anywhere except last produces incorrect results.

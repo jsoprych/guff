@@ -3,7 +3,9 @@ package provider
 import (
 	"context"
 	"strings"
+	"unsafe"
 
+	"github.com/hybridgroup/yzma/pkg/llama"
 	"github.com/jsoprych/guff/internal/generate"
 	"github.com/jsoprych/guff/internal/model"
 )
@@ -31,7 +33,7 @@ func (p *LocalProvider) ChatCompletion(ctx context.Context, req ChatRequest) (*C
 	gen := generate.NewGenerator(loaded)
 	defer gen.Close()
 
-	prompt := formatMessages(req.Messages)
+	prompt := formatMessagesWithTemplate(loaded, req.Messages)
 	opts := toGenOpts(req)
 
 	result, err := gen.Generate(ctx, prompt, opts)
@@ -55,7 +57,7 @@ func (p *LocalProvider) ChatCompletionStream(ctx context.Context, req ChatReques
 	}
 
 	gen := generate.NewGenerator(loaded)
-	prompt := formatMessages(req.Messages)
+	prompt := formatMessagesWithTemplate(loaded, req.Messages)
 	opts := toGenOpts(req)
 
 	srcCh := gen.GenerateStream(ctx, prompt, opts)
@@ -97,6 +99,68 @@ func (p *LocalProvider) ListModels(_ context.Context) ([]ModelInfo, error) {
 	}
 	return infos, nil
 }
+
+// formatMessagesWithTemplate uses the model's GGUF chat template if available,
+// falling back to the simple Role: content format.
+func formatMessagesWithTemplate(loaded *model.LoadedModel, msgs []Message) string {
+	if loaded.ChatTemplate == "" {
+		return formatMessages(msgs)
+	}
+
+	// Build llama.ChatMessage slice for the template engine
+	chatMsgs := make([]llama.ChatMessage, len(msgs))
+	// Keep Go strings alive for the duration of the call
+	roles := make([][]byte, len(msgs))
+	contents := make([][]byte, len(msgs))
+
+	for i, m := range msgs {
+		roles[i] = append([]byte(m.Role), 0)    // null-terminated
+		contents[i] = append([]byte(m.Content), 0)
+		chatMsgs[i] = llama.ChatMessage{
+			Role:    &roles[i][0],
+			Content: &contents[i][0],
+		}
+	}
+
+	// First call to get required buffer size
+	needed := llama.ChatApplyTemplate(loaded.ChatTemplate, chatMsgs, true, nil)
+	if needed <= 0 {
+		// Template failed, fall back to simple format
+		return formatMessages(msgs)
+	}
+
+	// Allocate buffer and apply template
+	buf := make([]byte, needed+1)
+	n := llama.ChatApplyTemplate(loaded.ChatTemplate, chatMsgs, true, buf)
+	if n <= 0 {
+		return formatMessages(msgs)
+	}
+
+	// Find the actual string (up to null terminator or n bytes)
+	end := int(n)
+	if end > len(buf) {
+		end = len(buf)
+	}
+	// Trim any null bytes
+	result := buf[:end]
+	if idx := indexOf(result, 0); idx >= 0 {
+		result = result[:idx]
+	}
+
+	return string(result)
+}
+
+func indexOf(b []byte, val byte) int {
+	for i, v := range b {
+		if v == val {
+			return i
+		}
+	}
+	return -1
+}
+
+// Ensure unsafe is used (for ChatMessage pointer fields)
+var _ = unsafe.Pointer(nil)
 
 // formatMessages converts chat messages to the simple prompt format used by local models.
 func formatMessages(msgs []Message) string {

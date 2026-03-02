@@ -49,31 +49,26 @@ Each MCP server entry specifies:
 
 ### Tool Execution Flow
 
-```
-User: "What files are in /tmp?"
-  |
-  v
-[System prompt includes tool descriptions from Registry.FormatForPrompt()]
-  |
-  v
-Model output: ```json
-{"tool": "filesystem_list", "arguments": {"path": "/tmp"}}
-```
-  |
-  v
-[ParseToolCall() extracts the tool call]
-  |
-  v
-[Registry.Execute() dispatches to the MCP handler]
-  |
-  v
-[MCPClient.CallTool() sends JSON-RPC to the MCP server]
-  |
-  v
-[Result injected back into conversation as a tool message]
-  |
-  v
-Model continues with tool result context
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant G as guff
+    participant M as Model
+    participant R as Registry
+    participant MCP as MCP Server
+
+    U->>G: "What files are in /tmp?"
+    G->>G: Inject tool descriptions (FormatForPrompt)
+    G->>M: Prompt with tool context
+    M-->>G: JSON tool call in output
+    G->>G: ParseToolCall() extracts call
+    G->>R: Registry.Execute()
+    R->>MCP: MCPClient.CallTool() (JSON-RPC)
+    MCP-->>R: Tool result
+    R-->>G: ToolResult
+    G->>M: Continue with tool result context
+    M-->>G: Final response
+    G-->>U: Display response
 ```
 
 ### For Local Models
