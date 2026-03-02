@@ -1,24 +1,19 @@
 # guff
 
-**The local-first AI runtime. Inference, routing, tools -- one binary, zero dependencies.**
+> **Your models. Your hardware. Your tools. No cloud required.**
 
-guff is the missing runtime layer for AI agents. Run GGUF models locally via llama.cpp with GPU acceleration, route seamlessly to frontier APIs (OpenAI, Anthropic, DeepSeek), serve MCP tool servers, and expose it all through Ollama-compatible and OpenAI-compatible endpoints -- from a single Go binary.
-
-**Built for the agentic stack.** Use guff as the inference backend for [OpenClaw](https://github.com/openclaw/openclaw) agents, MCP-powered tool chains, or your own autonomous systems. Local models + MCP tools + provider routing = agents that run anywhere, call anything, and don't need the cloud.
+You shouldn't need five different tools, three API keys, and a PhD in YAML to run an LLM. guff gives you local inference, frontier API routing, and MCP tool calling in a single binary that starts in under a second.
 
 ```bash
-# Local inference
-guff chat --model granite-3b
-
-# Route to DeepSeek
-guff chat --model deepseek/deepseek-chat
-
-# Route to OpenAI
-guff chat --model openai/gpt-4o
-
-# Serve as an API (Ollama + OpenAI compatible)
-guff serve
+guff chat --model granite-3b                    # local, on your GPU
+guff chat --model deepseek/deepseek-chat        # routed to DeepSeek
+guff chat --model openai/gpt-4o                 # routed to OpenAI
+guff serve                                      # serve all of the above as an API
 ```
+
+**One command. Any model. Any backend. Any tool.**
+
+guff is the runtime layer for the agentic stack -- the bridge between your local GGUF models, frontier APIs (OpenAI, Anthropic, DeepSeek), and the MCP tool ecosystem. Use it standalone, or drop it in as the inference backend for [OpenClaw](https://github.com/openclaw/openclaw), LangChain, or your own autonomous agents.
 
 ---
 
