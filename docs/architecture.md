@@ -7,7 +7,8 @@ graph TD
     CLI["CLI Commands<br/>pull / run / chat / serve"]
     CMD["cmd/ package"]
     MODEL["model/<br/>lifecycle + metadata"]
-    GEN["generate/<br/>inference + sampler chain"]
+    ENGINE["engine/<br/>completion + tool loop"]
+    GEN["generate/<br/>inference + sampler chain + embeddings"]
     CHAT["chat/<br/>sessions + context"]
     YZMA["llama.cpp via yzma FFI"]
     PROV["provider/ routing"]
@@ -15,9 +16,10 @@ graph TD
     OAI["OpenAI<br/>DeepSeek / Groq"]
     ANT["Anthropic"]
     TOOLS["tools/<br/>MCP + registry"]
-    API["api/ HTTP server"]
+    API["api/ HTTP server + UI"]
     OLLAMA["Ollama API<br/>/api/*"]
     OPENAI["OpenAI API<br/>/v1/*"]
+    UI["Chat UI<br/>/ui"]
     PROMPT["prompt/<br/>builder"]
 
     CLI --> CMD
@@ -31,9 +33,14 @@ graph TD
     PROV --> OAI
     PROV --> ANT
     LOCAL --> YZMA
+    CMD --> ENGINE
+    ENGINE --> PROV
+    ENGINE --> TOOLS
     CMD --> API
+    API --> ENGINE
     API --> OLLAMA
     API --> OPENAI
+    API --> UI
     API --> PROV
     TOOLS --> PROV
     PROMPT --> CMD
@@ -62,13 +69,23 @@ Entry point: `main.go` -> `cmd.Execute()` (Cobra).
 - **`LoadOptions`** -- `NumGpuLayers` (default 35), `UseMmap` (default true), `UseMlock` (default false).
 - Lazy initialization of llama.cpp backend via `sync.Once`.
 
-### `internal/generate/` -- Text Generation
+### `internal/engine/` -- Chat Engine
+
+- **`ChatEngine`** -- Unified completion entry point wrapping provider routing + tool-call loop.
+- **`ChatCompletion(ctx, req)`** -- Non-streaming completion with automatic tool call parsing/execution (max 5 rounds).
+- **`ChatCompletionStream(ctx, req)`** -- Streaming passthrough.
+- **`ListModels(ctx)`** -- Aggregates models from all providers.
+- **`ToolRegistry()`** -- Exposes the tool registry for dashboard endpoints.
+- Injects tool descriptions into system prompt when tools are registered.
+
+### `internal/generate/` -- Text Generation & Embeddings
 
 - **`Generator`** -- Wraps a `LoadedModel` for inference.
 - **`Generate(ctx, prompt, opts)`** -- Blocking generation, returns `GenerationResult`.
 - **`GenerateStream(ctx, prompt, opts)`** -- Returns `chan StreamChunk` (buffered 32 tokens).
-- **`createSamplerChain(opts)`** -- Builds the llama.cpp sampler chain. See [Sampling](sampling.md).
-- **`GenerationOptions`** -- Temperature, TopP, TopK, MinP, MaxTokens, Stop, Seed, RepeatPenalty, FrequencyPenalty, PresencePenalty, Grammar, Stream.
+- **`Embed(ctx, text)`** -- Generates embeddings with average pooling across tokens.
+- **`createSamplerChain(opts, vocab)`** -- Builds the 12-stage llama.cpp sampler chain. See [Sampling](sampling.md).
+- **`GenerationOptions`** -- Temperature, TopP, TopK, MinP, TypicalP, TopNSigma, DryMultiplier/Base/AllowedLen/PenaltyLast, XtcP/XtcT, LogitBias, MaxTokens, Stop, Seed, RepeatPenalty, FrequencyPenalty, PresencePenalty, Grammar, Stream.
 
 ### `internal/chat/` -- Chat System
 
@@ -127,7 +144,11 @@ Chi-based router with middleware (request ID, logging, recovery, timeout).
 | Ollama | `POST /api/pull` | `handlePullModel` (TODO) |
 | OpenAI | `POST /v1/chat/completions` | `handleV1ChatCompletions` |
 | OpenAI | `POST /v1/completions` | `handleV1Completions` |
+| OpenAI | `POST /v1/embeddings` | `handleV1Embeddings` |
 | OpenAI | `GET /v1/models` | `handleV1Models` |
+| Dashboard | `GET /ui` | Embedded chat/dashboard SPA |
+| Dashboard | `GET /api/status` | Server status JSON |
+| Dashboard | `GET /api/tools` | Tool definitions JSON |
 | Health | `GET /` | Server identification |
 | Health | `GET /health` | JSON health check |
 

@@ -37,6 +37,18 @@ generate:
   min_p: 0.0            # min-p filtering threshold
   max_tokens: 2048      # max tokens per generation
   repeat_penalty: 1.1   # penalty for token repetition
+  typical_p: 0.0        # typical sampling (0 = disabled)
+  top_n_sigma: 0.0      # top-n-sigma filter (0 = disabled)
+  dry_multiplier: 0.0   # DRY anti-repetition (0 = disabled)
+  dry_base: 1.75        # DRY exponential base
+  dry_allowed_len: 0    # DRY allowed repetition length
+  dry_penalty_last: 0   # DRY lookback window
+  grammar: ""           # GBNF grammar for constrained output
+
+# LoRA adapter
+lora:
+  path: ""              # path to LoRA adapter file
+  scale: 1.0            # LoRA scaling factor
 
 # System prompt (simple mode)
 system_prompt:

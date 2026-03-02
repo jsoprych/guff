@@ -1,5 +1,70 @@
 # Changelog
 
+## v0.1.3 -- Engine, UI, Samplers, Embeddings & LoRA (2026-03-02)
+
+### Chat Engine
+
+- New `internal/engine/` package: `ChatEngine` unifies completion + tool-call loop
+- Automatic tool call parsing → execution → re-call cycle (max 5 rounds)
+- Tool description injection into system prompt when tools are registered
+- Single entry point for both streaming and non-streaming completions
+
+### Chat UI
+
+- Embedded SPA at `/ui` with inline CSS/JS (dark theme, responsive)
+- Streaming chat via SSE to `/v1/chat/completions`
+- Model selector from `/v1/models`, parameter sliders (temp, top_p, top_k, max_tokens)
+- Dashboard sidebar: server status (`/api/status`), tool list (`/api/tools`)
+- Tool call visualization in assistant messages
+
+### Extended Sampler Chain (12 stages)
+
+- **New samplers wired:** Grammar (GBNF), LogitBias, Typical-P, Top-N-Sigma, DRY (anti-repetition), XTC
+- **Chain order:** Grammar → LogitBias → Temp → TopK → TopP → TypicalP → MinP → TopNSigma → Penalties → DRY → XTC → Terminal
+- **Removed:** Mirostat field (no individual yzma init function exists)
+- Config fields: `typical_p`, `top_n_sigma`, `dry_multiplier`, `dry_base`, `dry_allowed_len`, `dry_penalty_last`, `grammar`
+
+### Embeddings
+
+- `Generator.Embed()` for vector embedding generation with average pooling
+- `POST /v1/embeddings` endpoint (OpenAI-compatible format)
+- Supports string or array input
+
+### LoRA Support
+
+- Config: `lora.path` and `lora.scale` (default 1.0)
+- Loaded automatically at model load time via `AdapterLoraInit` + `SetAdaptersLora`
+- Cleaned up on model unload/switch
+
+### Model Metadata
+
+- `LoadedModel` now exposes: `VocabSize`, `GetMetadata(key)`, `HasEncoder()`, `IsRecurrent()`
+- Model warmup (`llama.Warmup`) called after loading for GPU kernel JIT compilation
+
+### API Endpoints
+
+- `GET /ui` -- embedded chat/dashboard SPA
+- `GET /api/status` -- server uptime, model, tool count, provider count
+- `GET /api/tools` -- registered tool definitions
+- `POST /v1/embeddings` -- OpenAI-compatible embeddings
+
+### Tests
+
+- 7 engine unit tests (mock provider with response queue)
+- 10 API smoke tests (httptest + mock engine)
+- 51 tests total across 9 packages, all passing
+
+### Dead Code Cleanup
+
+- Removed `Mirostat` field from `GenerationOptions`
+- Extracted `freeModel()` helper for LoRA-aware resource cleanup
+
+### Yzma Utilization
+
+- Increased from ~19% to ~33% (31 → 66 of ~199 exported functions)
+
+---
+
 ## v0.1.2 -- Model Persistence in Serve (2026-03-01)
 
 ### Model Persistence

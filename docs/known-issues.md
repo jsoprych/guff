@@ -26,13 +26,13 @@
 
 ## Sampling
 
-### Mirostat Not Implemented
+### ~~Mirostat Not Implemented~~ (REMOVED)
 
-The `Mirostat` field exists in `GenerationOptions` but is not wired to any sampler. Yzma supports mirostat sampling.
+~~The `Mirostat` field exists in `GenerationOptions`.~~ Removed. Yzma does not expose an individual `SamplerInitMirostat` function. Mirostat is not available as a standalone sampler in the current yzma API.
 
-### Grammar Constraints Not Exposed
+### ~~Grammar Constraints Not Exposed~~ (FIXED)
 
-Yzma provides `SamplerInitGrammar()` for BNF/GBNF grammar-constrained generation, but guff doesn't expose it yet. This would enable reliable structured output (JSON, function calls).
+~~Yzma provides `SamplerInitGrammar()` for BNF/GBNF grammar-constrained generation, but guff doesn't expose it yet.~~ Grammar constraints are now wired via `generate.grammar` config and the `Grammar` field in `GenerationOptions`. Applied as the first sampler in the 12-stage chain.
 
 ## MCP / Tools
 
@@ -104,19 +104,21 @@ SQLite storage is not optimized for concurrent access from multiple processes. R
 
 ## Yzma Integration
 
-### ~20% API Coverage
+### ~33% API Coverage
 
-guff uses approximately 43 of yzma's 180+ exported functions. Major unused capabilities:
+guff uses approximately 66 of yzma's ~199 exported functions (~33%). Major capabilities:
 
 | Feature | Yzma Function | Status |
 |---------|---------------|--------|
 | Model metadata | `NCtxTrain`, `NEmbd`, `NLayer`, `ModelDesc` | **Used** (v0.1.1) |
 | Chat templates | `ModelChatTemplate`, `ChatApplyTemplate` | **Used** (v0.1.1) |
-| GGUF key-value metadata | `ModelMetaValStr`, `ModelMetaCount` | Not used |
-| Embeddings | `Encode`, `GetEmbeddings` | Not used |
-| Grammar constraints | `SamplerInitGrammar` | Not used |
-| LoRA adapters | `LoraAdapterInit`, `SetLoraAdapter` | Not used |
+| GGUF key-value metadata | `ModelMetaValStr`, `ModelHasEncoder`, `ModelIsRecurrent` | **Used** (v0.1.3) |
+| Embeddings | `SetEmbeddings`, `Decode`, `GetEmbeddings` | **Used** (v0.1.3) |
+| Grammar constraints | `SamplerInitGrammar` | **Used** (v0.1.3) |
+| LoRA adapters | `AdapterLoraInit`, `SetAdaptersLora`, `AdapterLoraFree` | **Used** (v0.1.3) |
+| Extended samplers | `SamplerInitTypical`, `SamplerInitTopNSigma`, `SamplerInitDry`, `SamplerInitXTC`, `SamplerInitLogitBias` | **Used** (v0.1.3) |
+| Model warmup | `Warmup` | **Used** (v0.1.3) |
+| Vocab utilities | `VocabNTokens`, `VocabType`, `TokenBOS` | **Used** (v0.1.3) |
+| Performance metrics | `PerfContextReset` | **Used** (v0.1.3) |
 | KV cache management | `KvCacheSeqRm`, `KvCacheSeqCp` | Not used |
-| Performance metrics | `GetTimings`, `PerfContextReset` | Not used |
 | Batch processing | `BatchInit`, `BatchAdd` | Partially used |
-| Vocab utilities | `VocabType`, `NVocab`, `TokenBOS` | Partially used |

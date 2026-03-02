@@ -109,6 +109,39 @@ Legacy text completion endpoint.
 }
 ```
 
+### POST /v1/embeddings
+
+Generate embeddings for input text.
+
+**Request:**
+```json
+{
+  "model": "granite-3b",
+  "input": "Hello, world"
+}
+```
+
+`input` can be a string or an array of strings.
+
+**Response:**
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "index": 0,
+      "embedding": [0.0023, -0.0091, ...]
+    }
+  ],
+  "model": "granite-3b",
+  "usage": {
+    "prompt_tokens": 3,
+    "total_tokens": 3
+  }
+}
+```
+
 ### GET /v1/models
 
 List available models from all providers.
@@ -213,6 +246,44 @@ Chat completion with message history.
 ### POST /api/pull
 
 Download a model. **Not yet implemented** (returns 501).
+
+## Dashboard & UI
+
+### GET /ui
+
+Serves the embedded chat/dashboard SPA. Self-contained HTML with inline CSS/JS featuring:
+- Streaming chat interface
+- Model selector (populated from `/v1/models`)
+- Parameter controls (temperature, top_p, top_k, max_tokens)
+- Dashboard sidebar with server status and tool list
+- Tool call visualization
+
+### GET /api/status
+
+Server status for the dashboard.
+
+**Response:**
+```json
+{
+  "uptime": "2h30m15s",
+  "model": "granite-3b",
+  "tools_count": 5,
+  "providers": 3
+}
+```
+
+### GET /api/tools
+
+List registered tool definitions.
+
+**Response:**
+```json
+{
+  "tools": [
+    {"name": "read_file", "description": "Read a file from the filesystem"}
+  ]
+}
+```
 
 ## Health Endpoints
 

@@ -25,7 +25,7 @@ guff is the runtime layer for the agentic stack -- the bridge between your local
 
 **MCP-native tool use.** First-class MCP server integration over stdio JSON-RPC. Connect filesystem, database, GitHub, or any MCP-compatible tool server -- guff discovers tools at startup, injects them into the prompt, parses tool calls, executes them, and feeds results back. Your local 3B model gets the same tool-calling loop as Claude.
 
-**Proper sampling.** Full sampler chain with correct ordering: temperature, top-k, top-p, min-p, penalties, distribution sampling. Not just greedy argmax pretending to be random.
+**Proper sampling.** 12-stage sampler chain with correct ordering: grammar constraints, logit bias, temperature, top-k, top-p, typical-p, min-p, top-n-sigma, penalties, DRY, XTC, distribution sampling. Not just greedy argmax pretending to be random.
 
 **Context that doesn't explode.** Pluggable context management with real token counting, sliding window truncation, and live context status display. You always know how much runway you have left.
 
@@ -92,17 +92,25 @@ model_routes:
 
 ## API Server
 
-guff serves two API dialects simultaneously:
+guff serves two API dialects simultaneously, plus an embedded chat UI:
 
 ```bash
 guff serve --host 0.0.0.0 --port 8080
+# Chat UI available at http://localhost:8080/ui
 ```
+
+**Chat UI** -- built-in web interface at `/ui` with streaming chat, model selector, parameter controls, tool call visualization, and a live dashboard.
 
 **OpenAI-compatible** (works with any OpenAI SDK):
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "granite-3b", "messages": [{"role": "user", "content": "Hello"}]}'
+
+# Embeddings
+curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model": "granite-3b", "input": "Hello world"}'
 ```
 
 **Ollama-compatible** (works with Ollama clients):
@@ -201,7 +209,8 @@ guff
  |-- cmd/                    CLI commands (pull, run, chat, serve)
  |-- internal/
  |   |-- model/              Model lifecycle (load/unload/pull via yzma)
- |   |-- generate/           Text generation with full sampler chain
+ |   |-- engine/             ChatEngine: unified completion + tool loop
+ |   |-- generate/           Text generation, sampler chain, embeddings
  |   |-- chat/
  |   |   |-- session/        Session management + context budgets
  |   |   |-- context/        Pluggable context strategies + token counting
@@ -216,7 +225,8 @@ guff
  |   |   |-- mcp.go          MCP stdio JSON-RPC 2.0 client
  |   |   |-- parser.go       Extract tool calls from model output
  |   |-- prompt/             Multi-part prompt builder
- |   |-- api/                HTTP server (Ollama + OpenAI endpoints)
+ |   |-- api/                HTTP server (Ollama + OpenAI + chat UI)
+ |   |   |-- ui/             Embedded SPA (chat + dashboard)
  |   |-- config/             Viper-based YAML config
 ```
 

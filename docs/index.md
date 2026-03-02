@@ -6,7 +6,7 @@ Created by **John Soprych**, Chief Scientist at [Elko.AI](https://elko.ai).
 
 ## Overview
 
-guff runs GGUF models locally via llama.cpp (through yzma FFI bindings), routes requests to remote APIs (OpenAI, Anthropic, DeepSeek), and exposes both Ollama-compatible and OpenAI-compatible HTTP endpoints. GPU acceleration is automatic (CUDA, Metal, Vulkan).
+guff runs GGUF models locally via llama.cpp (through yzma FFI bindings), routes requests to remote APIs (OpenAI, Anthropic, DeepSeek), and exposes both Ollama-compatible and OpenAI-compatible HTTP endpoints with an embedded chat UI. GPU acceleration is automatic (CUDA, Metal, Vulkan). Supports grammar-constrained generation, LoRA adapters, embeddings, and a 12-stage sampler chain.
 
 ## Quick Start
 

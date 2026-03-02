@@ -4,21 +4,27 @@ guff uses llama.cpp's sampler chain system (via yzma) to control text generation
 
 ## Sampler Chain
 
-The chain is built in `internal/generate/generate.go:createSamplerChain()`:
+The chain is built in `internal/generate/generate.go:createSamplerChain(opts, vocab)`:
 
 ```mermaid
 flowchart LR
-    LOGITS["Raw Logits"] --> TEMP["Temperature<br/>scale randomness"]
+    LOGITS["Raw Logits"] --> GRAM["Grammar<br/>constrain candidates"]
+    GRAM --> BIAS["Logit Bias<br/>manual adjustments"]
+    BIAS --> TEMP["Temperature<br/>scale randomness"]
     TEMP --> TOPK["Top-K<br/>keep K most probable"]
     TOPK --> TOPP["Top-P<br/>nucleus sampling"]
-    TOPP --> MINP["Min-P<br/>relative threshold"]
-    MINP --> PEN["Penalties<br/>repeat/freq/presence"]
-    PEN --> TERM{"temp > 0?"}
+    TOPP --> TYP["Typical-P<br/>information content"]
+    TYP --> MINP["Min-P<br/>relative threshold"]
+    MINP --> TNS["Top-N-Sigma<br/>statistical filter"]
+    TNS --> PEN["Penalties<br/>repeat/freq/presence"]
+    PEN --> DRY["DRY<br/>anti-repetition"]
+    DRY --> XTC["XTC<br/>sampling"]
+    XTC --> TERM{"temp > 0?"}
     TERM -->|"Yes"| DIST["SamplerInitDist<br/>probabilistic"]
     TERM -->|"No"| GREEDY["SamplerInitGreedy<br/>deterministic"]
 ```
 
-**Order matters.** Each sampler filters or transforms the token probability distribution, and the terminal sampler makes the final selection. Putting the terminal sampler anywhere except last produces incorrect results.
+**12-stage chain.** Each sampler filters or transforms the token probability distribution, and the terminal sampler makes the final selection. Putting the terminal sampler anywhere except last produces incorrect results. Samplers with their value set to 0 or empty are skipped.
 
 ## Parameters
 
@@ -125,21 +131,69 @@ The final sampler in the chain selects the output token:
 
 This distinction is critical. The previous bug (now fixed) used `SamplerInitGreedy()` regardless of temperature, which made all probabilistic sampling parameters (top-p, top-k, temperature) effectively meaningless.
 
-## Available Samplers (not yet exposed)
+### Grammar Constraints
 
-Yzma provides additional samplers that are not yet integrated into guff:
+Constrains output to match a BNF/GBNF grammar. Applied first in the chain to limit candidate tokens before any other filtering.
+
+**Implementation:** `SamplerInitGrammar(vocab, grammar, "root")`
+
+**Config:** `generate.grammar` (GBNF string)
+
+Useful for structured output (JSON schemas, function call format).
+
+### Logit Bias
+
+Direct manipulation of token logits. Set specific token IDs to higher/lower probabilities.
+
+**Implementation:** `SamplerInitLogitBias(nVocab, nLogitBias, logitBias)`
+
+**Config:** Set via API request `logit_bias` field (map of token ID to bias value).
+
+### Typical-P
+
+Keeps tokens with typical information content, filtering outliers on both ends.
+
+**Implementation:** `SamplerInitTypical(p, minKeep=1)`
+
+**Config default:** 0.0 (disabled)
+
+### Top-N-Sigma
+
+Statistical sampling filter based on standard deviations from mean logit.
+
+**Implementation:** `SamplerInitTopNSigma(n)`
+
+**Config default:** 0.0 (disabled)
+
+### DRY (Don't Repeat Yourself)
+
+Anti-repetition sampler that penalizes sequences that form repetitive patterns.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `dry_multiplier` | 0.0 | Penalty strength (0 = disabled) |
+| `dry_base` | 1.75 | Exponential base |
+| `dry_allowed_len` | 0 | Allowed repetition length |
+| `dry_penalty_last` | 0 | Lookback window |
+
+**Implementation:** `SamplerInitDry(vocab, nCtxTrain, multiplier, base, allowedLen, penaltyLast)`
+
+### XTC
+
+Extended token-level control sampling.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `xtc_p` | 0.0 | XTC probability (0 = disabled) |
+| `xtc_t` | 0.0 | XTC threshold |
+
+**Implementation:** `SamplerInitXTC(p, t, minKeep=1, seed)`
+
+## Available Samplers (not yet exposed)
 
 | Sampler | Description |
 |---------|-------------|
-| `SamplerInitTypical(p, keep)` | Typical sampling -- keeps tokens with typical information content |
-| `SamplerInitXTC(p, t, minKeep, seed)` | XTC sampling |
-| `SamplerInitDry(vocab, ...)` | DRY sampling -- avoids dry repetition |
-| `SamplerInitGrammar(vocab, grammar, root)` | Grammar-constrained output (BNF/GBNF) |
 | `SamplerInitAdaptiveP(target, decay, seed)` | Adaptive-P sampling |
-| `SamplerInitLogitBias(...)` | Direct logit manipulation |
-| `SamplerInitTopNSigma(n)` | Top-N Sigma sampling |
-
-Grammar-constrained sampling is particularly relevant for structured output (JSON, function calls).
 
 ## Recommended Presets
 
