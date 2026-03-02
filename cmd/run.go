@@ -22,6 +22,10 @@ If no prompt is provided as an argument, reads from stdin.
 The model must already be downloaded (use 'guff pull' first).`,
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		verbose, _ := cmd.Flags().GetBool("verbose")
+		if verbose {
+			fmt.Fprintf(os.Stderr, "[DEBUG] Run command started\n")
+		}
 		// Determine prompt
 		var prompt string
 		if len(args) > 0 {
@@ -78,9 +82,9 @@ The model must already be downloaded (use 'guff pull' first).`,
 
 		// Load options
 		loadOpts := model.LoadOptions{
-			NumGpuLayers: 0, // TODO: make configurable
-			UseMmap:      true,
-			UseMlock:     false,
+			NumGpuLayers: appConfig.Model.NumGpuLayers,
+			UseMmap:      appConfig.Model.UseMmap,
+			UseMlock:     appConfig.Model.UseMlock,
 		}
 
 		// Load model
@@ -92,7 +96,7 @@ The model must already be downloaded (use 'guff pull' first).`,
 		}
 		defer mm.Unload()
 		loadTime := time.Since(startLoad)
-		if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
+		if verbose {
 			fmt.Fprintf(os.Stderr, "Model loaded in %v\n", loadTime)
 		}
 
@@ -142,12 +146,15 @@ The model must already be downloaded (use 'guff pull' first).`,
 				}
 			}
 
-			if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
+			if verbose {
 				fmt.Fprintf(os.Stderr, "\nGenerated %d tokens\n", genTokens)
 			}
 		} else {
 			// Non-streaming generation
 			startGen := time.Now()
+			if verbose {
+				fmt.Fprintf(os.Stderr, "[DEBUG] Calling generator.Generate with prompt: %q\n", prompt)
+			}
 			result, err := generator.Generate(ctx, prompt, genOpts)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Generation error: %v\n", err)
@@ -157,7 +164,7 @@ The model must already be downloaded (use 'guff pull' first).`,
 
 			// Output result
 			fmt.Print(result.Text)
-			if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
+			if verbose {
 				fmt.Fprintf(os.Stderr, "\nGenerated %d tokens in %v (%.1f tokens/sec)\n",
 					result.GenTokens, genTime, float64(result.GenTokens)/genTime.Seconds())
 			}
@@ -167,7 +174,7 @@ The model must already be downloaded (use 'guff pull' first).`,
 
 func init() {
 	runCmd.Flags().Int("max-tokens", 512, "Maximum number of tokens to generate")
-	runCmd.Flags().Float32("top-p", 0.95, "Top-p sampling parameter")
+	runCmd.Flags().Float32("top-p", 0, "Top-p (nucleus) sampling threshold (0 = disabled)")
 	runCmd.Flags().Int("top-k", 40, "Top-k sampling parameter")
 	runCmd.Flags().Uint32("seed", 0, "Random seed (0 = random)")
 	runCmd.Flags().Float32("repeat-penalty", 1.1, "Penalty for repeated tokens")

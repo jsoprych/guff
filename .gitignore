@@ -31,3 +31,16 @@ Thumbs.db
 
 # Temporary
 *~
+
+# AI coding agents
+CLAUDE.md
+.claude/
+.cursor/
+.cursorrules
+.copilot/
+.github/copilot-instructions.md
+.aider*
+.continue/
+.codeium/
+.windsurf/
+.amp/

@@ -144,9 +144,27 @@ func (s *SQLiteStorage) DeleteSession(ctx context.Context, id string) error {
 
 // ListSessions implements Storage.ListSessions.
 func (s *SQLiteStorage) ListSessions(ctx context.Context, userID string, limit, offset int) ([]*Session, error) {
-	query := `SELECT id, user_id, model_name, title, created_at, updated_at, message_count, total_tokens
-	          FROM sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?`
-	rows, err := s.db.QueryContext(ctx, query, userID, limit, offset)
+	var rows *sql.Rows
+	var err error
+	if userID == "" {
+		if limit <= 0 {
+			query := `SELECT id, user_id, model_name, title, created_at, updated_at, message_count, total_tokens
+			          FROM sessions ORDER BY updated_at DESC`
+			rows, err = s.db.QueryContext(ctx, query)
+		} else {
+			query := `SELECT id, user_id, model_name, title, created_at, updated_at, message_count, total_tokens
+			          FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?`
+			rows, err = s.db.QueryContext(ctx, query, limit, offset)
+		}
+	} else if limit <= 0 {
+		query := `SELECT id, user_id, model_name, title, created_at, updated_at, message_count, total_tokens
+		          FROM sessions WHERE user_id = ? ORDER BY updated_at DESC`
+		rows, err = s.db.QueryContext(ctx, query, userID)
+	} else {
+		query := `SELECT id, user_id, model_name, title, created_at, updated_at, message_count, total_tokens
+		          FROM sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?`
+		rows, err = s.db.QueryContext(ctx, query, userID, limit, offset)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -220,9 +238,17 @@ func (s *SQLiteStorage) GetMessage(ctx context.Context, id string) (*Message, er
 
 // GetMessages implements Storage.GetMessages.
 func (s *SQLiteStorage) GetMessages(ctx context.Context, sessionID string, limit, offset int) ([]*Message, error) {
-	query := `SELECT id, session_id, role, content, tool_calls, created_at, token_count
-	          FROM messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?`
-	rows, err := s.db.QueryContext(ctx, query, sessionID, limit, offset)
+	var rows *sql.Rows
+	var err error
+	if limit <= 0 {
+		query := `SELECT id, session_id, role, content, tool_calls, created_at, token_count
+		          FROM messages WHERE session_id = ? ORDER BY created_at ASC`
+		rows, err = s.db.QueryContext(ctx, query, sessionID)
+	} else {
+		query := `SELECT id, session_id, role, content, tool_calls, created_at, token_count
+		          FROM messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?`
+		rows, err = s.db.QueryContext(ctx, query, sessionID, limit, offset)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -2,11 +2,8 @@ package model
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,21 +16,30 @@ import (
 )
 
 var (
-	backendOnce sync.Once
+	backendOnce    sync.Once
+	backendInitErr error
 )
 
-func initBackend(libDir string) {
+func initBackend(libDir string) error {
 	backendOnce.Do(func() {
 		if err := llamaensure.EnsureLibraries(libDir); err != nil {
-			panic(fmt.Sprintf("failed to ensure llama.cpp libraries: %v", err))
+			backendInitErr = fmt.Errorf("failed to ensure llama.cpp libraries: %w", err)
+			return
 		}
 		libPath := libDir // directory containing llama.cpp libraries
 		if err := llama.Load(libPath); err != nil {
-			panic(fmt.Sprintf("failed to load llama.cpp library: %v", err))
+			backendInitErr = fmt.Errorf("failed to load llama.cpp library: %w", err)
+			return
+		}
+		llama.BackendInit()
+		if err := llama.GGMLBackendLoadAllFromPath(libDir); err != nil {
+			backendInitErr = fmt.Errorf("failed to load GGML backends: %w", err)
+			return
 		}
 		llama.LogSet(llama.LogNormal)
 		llama.Init()
 	})
+	return backendInitErr
 }
 
 // ModelManager handles model lifecycle
@@ -139,17 +145,21 @@ func (m *ModelManager) ScanModels() error {
 	if err != nil {
 		return err
 	}
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		modelName := entry.Name()
+
 		modelDir := filepath.Join(m.modelsDir, modelName)
 		ggufFiles, err := filepath.Glob(filepath.Join(modelDir, "*.gguf"))
 		if err != nil {
 			continue
 		}
+
 		for _, ggufPath := range ggufFiles {
+
 			base := filepath.Base(ggufPath)
 			quant := ""
 			if len(base) > 5 && strings.HasSuffix(base, ".gguf") {
@@ -197,7 +207,9 @@ func (m *ModelManager) Load(name string, opts LoadOptions) (*LoadedModel, error)
 	if m.config != nil && m.config.Paths() != nil {
 		libDir = m.config.Paths().LibDir()
 	}
-	initBackend(libDir)
+	if err := initBackend(libDir); err != nil {
+		return nil, fmt.Errorf("backend initialization failed: %w", err)
+	}
 	m.mu.RLock()
 	info, ok := m.registry[name]
 	m.mu.RUnlock()
@@ -322,16 +334,8 @@ func (m *ModelManager) updateModelInfo(name, path, quantization string) error {
 		return fmt.Errorf("stat model file: %w", err)
 	}
 
-	// Compute SHA256 digest
+	// Compute SHA256 digest (disabled for performance)
 	digest := ""
-	file, err := os.Open(path)
-	if err == nil {
-		defer file.Close()
-		hash := sha256.New()
-		if _, err := io.Copy(hash, file); err == nil {
-			digest = hex.EncodeToString(hash.Sum(nil))
-		}
-	}
 
 	// TODO: parse GGUF metadata for architecture, context length, etc.
 	modelInfo := &ModelInfo{

@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"time"
 )
 
@@ -58,6 +60,15 @@ type StateFile struct {
 	Path       string    `json:"path"`
 	CreatedAt  time.Time `json:"created_at"`
 	TokenCount int       `json:"token_count"`
+}
+
+// GenerateID returns a cryptographically random 32-character hex string.
+func GenerateID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(b)
 }
 
 // Storage defines the interface for persistent storage of chat data.

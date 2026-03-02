@@ -8,12 +8,12 @@ set -e
 MODEL="${1:-granite-3b}"
 QUANT="${2:-Q4_K_M}"
 
-# Hugging Face token - prefer environment variable, fallback to config
-TOKEN="${GUFF_HUGGINGFACE_TOKEN:-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}"
+# Hugging Face token - require environment variable
+TOKEN="${GUFF_HUGGINGFACE_TOKEN}"
 
 if [ -z "$TOKEN" ]; then
     echo "ERROR: No Hugging Face token found."
-    echo "Set GUFF_HUGGINGFACE_TOKEN environment variable or edit this script."
+    echo "Set GUFF_HUGGINGFACE_TOKEN environment variable."
     exit 1
 fi
 

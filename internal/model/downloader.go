@@ -20,7 +20,7 @@ type HuggingFaceDownloader struct {
 
 // NewHuggingFaceDownloader creates a new downloader
 func NewHuggingFaceDownloader(token string) *HuggingFaceDownloader {
-	jar, _ := cookiejar.New(nil)
+	jar, _ := cookiejar.New(nil) // cookiejar.New with nil options never returns an error
 	return &HuggingFaceDownloader{
 		client: &http.Client{
 			Jar: jar,
@@ -71,25 +71,29 @@ func (d *HuggingFaceDownloader) DownloadFile(ctx context.Context, url, dest stri
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
-	defer file.Close()
 
 	// Copy with progress
 	var downloaded int64
 	total := resp.ContentLength
 
 	buf := make([]byte, 32*1024)
+	var downloadErr error
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			downloadErr = ctx.Err()
 		default:
+		}
+		if downloadErr != nil {
+			break
 		}
 
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			_, writeErr := file.Write(buf[:n])
 			if writeErr != nil {
-				return fmt.Errorf("write file: %w", writeErr)
+				downloadErr = fmt.Errorf("write file: %w", writeErr)
+				break
 			}
 			downloaded += int64(n)
 			if progress != nil && total > 0 {
@@ -100,12 +104,21 @@ func (d *HuggingFaceDownloader) DownloadFile(ctx context.Context, url, dest stri
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("read response: %w", err)
+			downloadErr = fmt.Errorf("read response: %w", err)
+			break
 		}
+	}
+
+	file.Close()
+
+	if downloadErr != nil {
+		os.Remove(tmpDest)
+		return downloadErr
 	}
 
 	// Rename temporary file to final destination
 	if err := os.Rename(tmpDest, dest); err != nil {
+		os.Remove(tmpDest)
 		return fmt.Errorf("rename file: %w", err)
 	}
 

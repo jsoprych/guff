@@ -29,6 +29,10 @@ var pullCmd = &cobra.Command{
 		err := mm.Pull(ctx, modelName, model.PullOptions{
 			Quantization: quantization,
 			Progress: func(downloaded, total int64) {
+				if total <= 0 {
+					fmt.Printf("\rDownloaded: %d MB", downloaded/1024/1024)
+					return
+				}
 				percent := float64(downloaded) / float64(total) * 100
 				fmt.Printf("\rDownloaded: %.1f%% (%d/%d MB)",
 					percent, downloaded/1024/1024, total/1024/1024)

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -12,12 +13,14 @@ import (
 	"github.com/jsoprych/guff/internal/config"
 	"github.com/jsoprych/guff/internal/generate"
 	"github.com/jsoprych/guff/internal/model"
+	"github.com/jsoprych/guff/internal/provider"
 )
 
 type Server struct {
-	router *chi.Mux
-	model  *model.ModelManager
-	config *config.Config
+	router         *chi.Mux
+	model          *model.ModelManager
+	config         *config.Config
+	providerRouter *provider.Router
 }
 
 func NewServer(mm *model.ModelManager, cfg *config.Config) *Server {
@@ -28,6 +31,11 @@ func NewServer(mm *model.ModelManager, cfg *config.Config) *Server {
 	}
 	s.setupRoutes()
 	return s
+}
+
+// SetProviderRouter sets the provider router for OpenAI-compatible endpoints.
+func (s *Server) SetProviderRouter(r *provider.Router) {
+	s.providerRouter = r
 }
 
 func (s *Server) setupRoutes() {
@@ -42,14 +50,18 @@ func (s *Server) setupRoutes() {
 
 	// Health check
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("guff API server"))
+		if _, err := w.Write([]byte("guff API server")); err != nil {
+			log.Printf("write error: %v", err)
+		}
 	})
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+			log.Printf("write error: %v", err)
+		}
 	})
 
-	// API routes
+	// Ollama-compatible API routes
 	r.Route("/api", func(r chi.Router) {
 		// Model management
 		r.Get("/tags", s.handleListModels)
@@ -58,6 +70,13 @@ func (s *Server) setupRoutes() {
 		// Generation
 		r.Post("/generate", s.handleGenerate)
 		r.Post("/chat", s.handleChat)
+	})
+
+	// OpenAI-compatible API routes
+	r.Route("/v1", func(r chi.Router) {
+		r.Post("/chat/completions", s.handleV1ChatCompletions)
+		r.Post("/completions", s.handleV1Completions)
+		r.Get("/models", s.handleV1Models)
 	})
 }
 
@@ -119,7 +138,9 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 			"digest": m.Digest,
 		})
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{"models": resp})
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{"models": resp}); err != nil {
+		log.Printf("write error: %v", err)
+	}
 }
 
 func (s *Server) handlePullModel(w http.ResponseWriter, r *http.Request) {
@@ -146,9 +167,9 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 
 	// Load model
 	loadOpts := model.LoadOptions{
-		NumGpuLayers: 0,
-		UseMmap:      true,
-		UseMlock:     false,
+		NumGpuLayers: s.config.Model.NumGpuLayers,
+		UseMmap:      s.config.Model.UseMmap,
+		UseMlock:     s.config.Model.UseMlock,
 	}
 	loaded, err := s.model.Load(req.Model, loadOpts)
 	if err != nil {
@@ -161,15 +182,15 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	generator := generate.NewGenerator(loaded)
 	defer generator.Close()
 
-	// Prepare generation options
+	// Prepare generation options from config defaults
 	genOpts := generate.GenerationOptions{
-		Temperature:      0.0,
-		TopP:             0.95,
-		TopK:             40,
-		MaxTokens:        512,
+		Temperature:      s.config.Generate.Temperature,
+		TopP:             s.config.Generate.TopP,
+		TopK:             s.config.Generate.TopK,
+		MaxTokens:        s.config.Generate.MaxTokens,
 		Stop:             []string{"\n"},
 		Seed:             0,
-		RepeatPenalty:    1.1,
+		RepeatPenalty:    s.config.Generate.RepeatPenalty,
 		FrequencyPenalty: 0.0,
 		PresencePenalty:  0.0,
 		Mirostat:         0,
@@ -221,7 +242,11 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 				event := map[string]interface{}{
 					"error": chunk.Error.Error(),
 				}
-				data, _ := json.Marshal(event)
+				data, err := json.Marshal(event)
+				if err != nil {
+					log.Printf("json marshal error: %v", err)
+					return
+				}
 				fmt.Fprintf(w, "data: %s\n\n", data)
 				flusher.Flush()
 				return
@@ -234,7 +259,11 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 				Response:  chunk.Text,
 				Done:      chunk.Done,
 			}
-			data, _ := json.Marshal(resp)
+			data, err := json.Marshal(resp)
+			if err != nil {
+				log.Printf("json marshal error: %v", err)
+				return
+			}
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 
@@ -262,7 +291,9 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("write error: %v", err)
+	}
 }
 
 // formatChatMessages converts chat messages into a prompt string.
@@ -314,9 +345,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	// Load model
 	loadOpts := model.LoadOptions{
-		NumGpuLayers: 0,
-		UseMmap:      true,
-		UseMlock:     false,
+		NumGpuLayers: s.config.Model.NumGpuLayers,
+		UseMmap:      s.config.Model.UseMmap,
+		UseMlock:     s.config.Model.UseMlock,
 	}
 	loaded, err := s.model.Load(req.Model, loadOpts)
 	if err != nil {
@@ -332,15 +363,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Format messages into prompt
 	prompt := formatChatMessages(req.Messages)
 
-	// Prepare generation options
+	// Prepare generation options from config defaults
 	genOpts := generate.GenerationOptions{
-		Temperature:      0.0,
-		TopP:             0.95,
-		TopK:             40,
-		MaxTokens:        512,
+		Temperature:      s.config.Generate.Temperature,
+		TopP:             s.config.Generate.TopP,
+		TopK:             s.config.Generate.TopK,
+		MaxTokens:        s.config.Generate.MaxTokens,
 		Stop:             []string{"\n"},
 		Seed:             0,
-		RepeatPenalty:    1.1,
+		RepeatPenalty:    s.config.Generate.RepeatPenalty,
 		FrequencyPenalty: 0.0,
 		PresencePenalty:  0.0,
 		Mirostat:         0,
@@ -394,7 +425,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				event := map[string]interface{}{
 					"error": chunk.Error.Error(),
 				}
-				data, _ := json.Marshal(event)
+				data, err := json.Marshal(event)
+				if err != nil {
+					log.Printf("json marshal error: %v", err)
+					return
+				}
 				fmt.Fprintf(w, "data: %s\n\n", data)
 				flusher.Flush()
 				return
@@ -412,7 +447,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				},
 				Done: chunk.Done,
 			}
-			data, _ := json.Marshal(resp)
+			data, err := json.Marshal(resp)
+			if err != nil {
+				log.Printf("json marshal error: %v", err)
+				return
+			}
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 
@@ -443,5 +482,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("write error: %v", err)
+	}
 }

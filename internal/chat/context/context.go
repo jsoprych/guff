@@ -5,19 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jsoprych/guff/internal/chat/storage"
 )
 
-// Strategy defines how to handle context‑window overflows.
-type Strategy string
-
+// Strategy name constants for convenience.
 const (
-	StrategyTruncateOldest Strategy = "truncate_oldest" // discard oldest messages
-	StrategyTruncateNewest Strategy = "truncate_newest" // discard newest messages (except system)
-	StrategyFail           Strategy = "fail"            // return error
-	// Future: StrategySummarize, StrategySlide
+	StrategySlidingWindow = "sliding_window"
+	StrategyFail          = "fail"
 )
 
 var (
@@ -26,26 +23,42 @@ var (
 	ErrInvalidStrategy = errors.New("invalid strategy")
 )
 
-// ContextManager manages the token‑count and formatting of a session’s messages.
+// ContextStrategy defines how to handle context window overflow.
+type ContextStrategy interface {
+	Name() string
+	Truncate(ctx context.Context, store storage.Storage, sessionID string,
+		messages []*storage.Message, tokenBudget int) ([]*storage.Message, error)
+}
+
+// NewStrategy returns a ContextStrategy by name.
+func NewStrategy(name string) (ContextStrategy, error) {
+	switch name {
+	case StrategySlidingWindow:
+		return &SlidingWindowStrategy{}, nil
+	case StrategyFail:
+		return &FailStrategy{}, nil
+	default:
+		return nil, fmt.Errorf("%w: %s", ErrInvalidStrategy, name)
+	}
+}
+
+// ContextStatus holds a snapshot of the context state for display.
+type ContextStatus struct {
+	MessageCount int
+	TotalTokens  int
+	TokenBudget  int
+	StrategyName string
+	Truncated    bool
+}
+
+// ContextManager manages the token-count and formatting of a session's messages.
 type ContextManager interface {
-	// Add a message to the session, updating token counts.
 	AddMessage(ctx context.Context, sessionID, role, content string) (tokenCount int, err error)
-
-	// Retrieve formatted prompt for generation, respecting maxTokens.
-	// If the session’s current token count exceeds maxTokens, apply the configured strategy.
 	GetContext(ctx context.Context, sessionID string, maxTokens int) (formatted string, err error)
-
-	// Explicitly truncate the session’s messages using the given strategy.
-	Truncate(ctx context.Context, sessionID string, strategy Strategy) error
-
-	// Clear all messages (but keep the session record).
 	ClearContext(ctx context.Context, sessionID string) error
-
-	// Return the current token count for the session.
 	TokenCount(ctx context.Context, sessionID string) (int, error)
-
-	// Set/change the context‑window strategy for a session.
-	SetStrategy(ctx context.Context, sessionID string, strategy Strategy) error
+	SetStrategy(ctx context.Context, sessionID string, strategy ContextStrategy) error
+	GetStatus(ctx context.Context, sessionID string) (*ContextStatus, error)
 }
 
 // Tokenizer defines the interface for token counting.
@@ -55,23 +68,27 @@ type Tokenizer interface {
 
 // DefaultContextManager implements ContextManager with storage and tokenizer.
 type DefaultContextManager struct {
-	store      storage.Storage
-	tokenizer  Tokenizer
-	strategies map[string]Strategy // sessionID -> strategy
+	store       storage.Storage
+	tokenizer   Tokenizer
+	mu          sync.RWMutex
+	strategies  map[string]ContextStrategy // sessionID -> strategy
+	lastBudget  map[string]int             // sessionID -> last token budget used
+	truncatedAt map[string]bool            // sessionID -> whether truncation happened last GetContext
 }
 
 // NewDefaultContextManager creates a new context manager.
 func NewDefaultContextManager(store storage.Storage, tokenizer Tokenizer) *DefaultContextManager {
 	return &DefaultContextManager{
-		store:      store,
-		tokenizer:  tokenizer,
-		strategies: make(map[string]Strategy),
+		store:       store,
+		tokenizer:   tokenizer,
+		strategies:  make(map[string]ContextStrategy),
+		lastBudget:  make(map[string]int),
+		truncatedAt: make(map[string]bool),
 	}
 }
 
 // AddMessage implements ContextManager.AddMessage.
 func (cm *DefaultContextManager) AddMessage(ctx context.Context, sessionID, role, content string) (int, error) {
-	// Get session to ensure it exists
 	session, err := cm.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return 0, err
@@ -80,12 +97,10 @@ func (cm *DefaultContextManager) AddMessage(ctx context.Context, sessionID, role
 		return 0, ErrSessionNotFound
 	}
 
-	// Count tokens for this message
 	tokenCount := cm.tokenizer.CountTokens(content)
 
-	// Create message record
 	msg := &storage.Message{
-		ID:         generateID(),
+		ID:         storage.GenerateID(),
 		SessionID:  sessionID,
 		Role:       storage.MessageRole(role),
 		Content:    content,
@@ -93,18 +108,15 @@ func (cm *DefaultContextManager) AddMessage(ctx context.Context, sessionID, role
 		TokenCount: tokenCount,
 	}
 
-	// Save message
 	if err := cm.store.AddMessage(ctx, msg); err != nil {
 		return 0, err
 	}
 
-	// Update session token count
 	session.TotalTokens += tokenCount
 	session.MessageCount++
 	session.UpdatedAt = time.Now()
 
 	if err := cm.store.UpdateSession(ctx, session); err != nil {
-		// Attempt to rollback message?
 		return 0, err
 	}
 
@@ -113,7 +125,6 @@ func (cm *DefaultContextManager) AddMessage(ctx context.Context, sessionID, role
 
 // GetContext implements ContextManager.GetContext.
 func (cm *DefaultContextManager) GetContext(ctx context.Context, sessionID string, maxTokens int) (string, error) {
-	// Get session
 	session, err := cm.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return "", err
@@ -122,66 +133,53 @@ func (cm *DefaultContextManager) GetContext(ctx context.Context, sessionID strin
 		return "", ErrSessionNotFound
 	}
 
-	// Get all messages
-	messages, err := cm.store.GetMessages(ctx, sessionID, 0, 0) // 0,0 means all messages
+	messages, err := cm.store.GetMessages(ctx, sessionID, 0, 0)
 	if err != nil {
 		return "", err
 	}
 
-	// Calculate total tokens
 	totalTokens := 0
 	for _, msg := range messages {
 		totalTokens += msg.TokenCount
 	}
 
-	// Apply strategy if needed
+	// Track status
+	cm.mu.Lock()
+	cm.lastBudget[sessionID] = maxTokens
+	cm.mu.Unlock()
+
+	truncated := false
 	if totalTokens > maxTokens {
+		truncated = true
 		strategy := cm.getStrategy(sessionID)
-		if err := cm.applyTruncation(ctx, sessionID, messages, maxTokens, strategy); err != nil {
+		remaining, err := strategy.Truncate(ctx, cm.store, sessionID, messages, maxTokens)
+		if err != nil {
 			return "", err
 		}
-		// Re-fetch messages after truncation
+		// Update session counts after truncation
+		if err := cm.updateSessionAfterTruncation(ctx, sessionID, remaining); err != nil {
+			return "", err
+		}
+		// Re-fetch to get canonical order from storage
 		messages, err = cm.store.GetMessages(ctx, sessionID, 0, 0)
 		if err != nil {
 			return "", err
 		}
 	}
 
-	// Format messages into prompt
+	cm.mu.Lock()
+	cm.truncatedAt[sessionID] = truncated
+	cm.mu.Unlock()
+
 	return cm.formatMessages(messages), nil
-}
-
-// Truncate implements ContextManager.Truncate.
-func (cm *DefaultContextManager) Truncate(ctx context.Context, sessionID string, strategy Strategy) error {
-	// Validate strategy
-	if !isValidStrategy(strategy) {
-		return ErrInvalidStrategy
-	}
-
-	// Get messages
-	messages, err := cm.store.GetMessages(ctx, sessionID, 0, 0)
-	if err != nil {
-		return err
-	}
-
-	// Calculate current tokens
-	totalTokens := 0
-	for _, msg := range messages {
-		totalTokens += msg.TokenCount
-	}
-
-	// Apply truncation to fit within current token count (i.e., no max reduction)
-	return cm.applyTruncation(ctx, sessionID, messages, totalTokens, strategy)
 }
 
 // ClearContext implements ContextManager.ClearContext.
 func (cm *DefaultContextManager) ClearContext(ctx context.Context, sessionID string) error {
-	// Delete all messages for session
 	if err := cm.store.DeleteMessages(ctx, sessionID); err != nil {
 		return err
 	}
 
-	// Update session counts
 	session, err := cm.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return err
@@ -210,95 +208,55 @@ func (cm *DefaultContextManager) TokenCount(ctx context.Context, sessionID strin
 }
 
 // SetStrategy implements ContextManager.SetStrategy.
-func (cm *DefaultContextManager) SetStrategy(ctx context.Context, sessionID string, strategy Strategy) error {
-	if !isValidStrategy(strategy) {
+func (cm *DefaultContextManager) SetStrategy(ctx context.Context, sessionID string, strategy ContextStrategy) error {
+	if strategy == nil {
 		return ErrInvalidStrategy
 	}
+	cm.mu.Lock()
 	cm.strategies[sessionID] = strategy
+	cm.mu.Unlock()
 	return nil
+}
+
+// GetStatus implements ContextManager.GetStatus.
+func (cm *DefaultContextManager) GetStatus(ctx context.Context, sessionID string) (*ContextStatus, error) {
+	session, err := cm.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if session == nil {
+		return nil, ErrSessionNotFound
+	}
+
+	cm.mu.RLock()
+	budget := cm.lastBudget[sessionID]
+	truncated := cm.truncatedAt[sessionID]
+	strategy := cm.getStrategyLocked(sessionID)
+	cm.mu.RUnlock()
+
+	return &ContextStatus{
+		MessageCount: session.MessageCount,
+		TotalTokens:  session.TotalTokens,
+		TokenBudget:  budget,
+		StrategyName: strategy.Name(),
+		Truncated:    truncated,
+	}, nil
 }
 
 // Helper methods
 
-func (cm *DefaultContextManager) getStrategy(sessionID string) Strategy {
+func (cm *DefaultContextManager) getStrategy(sessionID string) ContextStrategy {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.getStrategyLocked(sessionID)
+}
+
+// getStrategyLocked returns the strategy for a session. Caller must hold cm.mu (read or write).
+func (cm *DefaultContextManager) getStrategyLocked(sessionID string) ContextStrategy {
 	if strategy, ok := cm.strategies[sessionID]; ok {
 		return strategy
 	}
-	return StrategyTruncateOldest // default
-}
-
-func (cm *DefaultContextManager) applyTruncation(ctx context.Context, sessionID string, messages []*storage.Message, maxTokens int, strategy Strategy) error {
-	switch strategy {
-	case StrategyTruncateOldest:
-		return cm.truncateOldest(ctx, sessionID, messages, maxTokens)
-	case StrategyTruncateNewest:
-		return cm.truncateNewest(ctx, sessionID, messages, maxTokens)
-	case StrategyFail:
-		return ErrContextTooLong
-	default:
-		return ErrInvalidStrategy
-	}
-}
-
-func (cm *DefaultContextManager) truncateOldest(ctx context.Context, sessionID string, messages []*storage.Message, maxTokens int) error {
-	// Keep newest messages that fit within maxTokens
-	totalTokens := 0
-	keepFrom := len(messages)
-
-	// Start from newest (last) message and work backwards
-	for i := len(messages) - 1; i >= 0; i-- {
-		totalTokens += messages[i].TokenCount
-		if totalTokens > maxTokens {
-			keepFrom = i + 1
-			break
-		}
-	}
-
-	// Delete messages before keepFrom
-	for i := 0; i < keepFrom; i++ {
-		if err := cm.store.DeleteMessage(ctx, messages[i].ID); err != nil {
-			return err
-		}
-	}
-
-	// Update session counts
-	return cm.updateSessionAfterTruncation(ctx, sessionID, messages[keepFrom:])
-}
-
-func (cm *DefaultContextManager) truncateNewest(ctx context.Context, sessionID string, messages []*storage.Message, maxTokens int) error {
-	// Keep oldest messages, preserving system messages if possible
-	totalTokens := 0
-	keepUntil := 0
-
-	// First pass: count system messages (they stay)
-	for i, msg := range messages {
-		if msg.Role == storage.RoleSystem {
-			totalTokens += msg.TokenCount
-			keepUntil = i + 1
-		}
-	}
-
-	// Second pass: add oldest non-system messages until maxTokens
-	for i, msg := range messages {
-		if msg.Role == storage.RoleSystem {
-			continue // already counted
-		}
-		totalTokens += msg.TokenCount
-		if totalTokens > maxTokens {
-			break
-		}
-		keepUntil = i + 1
-	}
-
-	// Delete messages after keepUntil
-	for i := keepUntil; i < len(messages); i++ {
-		if err := cm.store.DeleteMessage(ctx, messages[i].ID); err != nil {
-			return err
-		}
-	}
-
-	// Update session counts
-	return cm.updateSessionAfterTruncation(ctx, sessionID, messages[:keepUntil])
+	return &SlidingWindowStrategy{} // default
 }
 
 func (cm *DefaultContextManager) updateSessionAfterTruncation(ctx context.Context, sessionID string, remaining []*storage.Message) error {
@@ -306,8 +264,10 @@ func (cm *DefaultContextManager) updateSessionAfterTruncation(ctx context.Contex
 	if err != nil {
 		return err
 	}
+	if session == nil {
+		return ErrSessionNotFound
+	}
 
-	// Recalculate totals
 	totalTokens := 0
 	for _, msg := range remaining {
 		totalTokens += msg.TokenCount
@@ -336,16 +296,6 @@ func (cm *DefaultContextManager) formatMessages(messages []*storage.Message) str
 		formatted.WriteString(msg.Content)
 		formatted.WriteString("\n")
 	}
-	// Add final "Assistant:" prefix for next response
 	formatted.WriteString("Assistant:")
 	return formatted.String()
-}
-
-func generateID() string {
-	// TODO: implement proper UUID generation
-	return fmt.Sprintf("%x", time.Now().UnixNano())
-}
-
-func isValidStrategy(s Strategy) bool {
-	return s == StrategyTruncateOldest || s == StrategyTruncateNewest || s == StrategyFail
 }

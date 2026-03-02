@@ -14,6 +14,7 @@ type GenerationOptions struct {
 	Temperature      float32
 	TopP             float32
 	TopK             int
+	MinP             float32
 	MaxTokens        int
 	Stop             []string
 	Seed             uint32
@@ -26,27 +27,45 @@ type GenerationOptions struct {
 }
 
 // createSamplerChain creates a sampler chain based on generation options.
+// Order matters: filters first (temp, top-k, top-p, min-p, penalties),
+// then terminal sampler last (dist for probabilistic, greedy for deterministic).
 func createSamplerChain(opts GenerationOptions) llama.Sampler {
 	chain := llama.SamplerChainInit(llama.SamplerChainDefaultParams())
-	// Add greedy sampler as base
-	llama.SamplerChainAdd(chain, llama.SamplerInitGreedy())
-	// Add temperature if > 0
+
+	// Temperature — must come before other probabilistic filters
 	if opts.Temperature > 0 {
-		// Using TempExt with delta=0, exponent=1 for standard temperature
 		llama.SamplerChainAdd(chain, llama.SamplerInitTempExt(opts.Temperature, 0.0, 1.0))
 	}
-	// Add top-p if > 0
-	if opts.TopP > 0 && opts.TopP < 1.0 {
-		llama.SamplerChainAdd(chain, llama.SamplerInitTopP(opts.TopP, 1))
-	}
-	// Add top-k if > 0
+
+	// Top-K: keep only top K candidates
 	if opts.TopK > 0 {
 		llama.SamplerChainAdd(chain, llama.SamplerInitTopK(int32(opts.TopK)))
 	}
-	// Add repeat penalty if > 1.0
-	if opts.RepeatPenalty > 1.0 {
+
+	// Top-P (nucleus sampling): keep smallest set of tokens whose cumulative prob >= p
+	if opts.TopP > 0 && opts.TopP < 1.0 {
+		llama.SamplerChainAdd(chain, llama.SamplerInitTopP(opts.TopP, 1))
+	}
+
+	// Min-P: discard tokens with prob < p * prob_of_top_token
+	if opts.MinP > 0 {
+		llama.SamplerChainAdd(chain, llama.SamplerInitMinP(opts.MinP, 1))
+	}
+
+	// Repeat/frequency/presence penalties
+	if opts.RepeatPenalty > 1.0 || opts.FrequencyPenalty != 0 || opts.PresencePenalty != 0 {
 		llama.SamplerChainAdd(chain, llama.SamplerInitPenalties(-1, opts.RepeatPenalty, opts.FrequencyPenalty, opts.PresencePenalty))
 	}
+
+	// Terminal sampler — MUST be last in the chain
+	// Use distribution sampling when temperature > 0 (probabilistic),
+	// greedy when temperature == 0 (deterministic / argmax)
+	if opts.Temperature > 0 {
+		llama.SamplerChainAdd(chain, llama.SamplerInitDist(opts.Seed))
+	} else {
+		llama.SamplerChainAdd(chain, llama.SamplerInitGreedy())
+	}
+
 	return chain
 }
 
@@ -76,9 +95,30 @@ func NewGenerator(m *model.LoadedModel) *Generator {
 	}
 }
 
+// clearKVCache clears the KV cache so the next decode starts fresh.
+func (g *Generator) clearKVCache() {
+	mem, err := llama.GetMemory(g.model.Ctx)
+	if err == nil && mem != 0 {
+		llama.MemoryClear(mem, true)
+	}
+}
+
+// trimStopStrings removes any trailing stop string from text.
+func trimStopStrings(text string, stop []string) string {
+	for _, s := range stop {
+		if s != "" && strings.HasSuffix(text, s) {
+			return strings.TrimSuffix(text, s)
+		}
+	}
+	return text
+}
+
 // Generate completes a prompt with the given options.
 func (g *Generator) Generate(ctx context.Context, prompt string, opts GenerationOptions) (*GenerationResult, error) {
 	start := time.Now()
+
+	// Clear KV cache from any previous generation
+	g.clearKVCache()
 
 	// Create sampler chain for this generation
 	sampler := createSamplerChain(opts)
@@ -109,11 +149,12 @@ func (g *Generator) Generate(ctx context.Context, prompt string, opts Generation
 
 		// Check for end of generation
 		if llama.VocabIsEOG(g.model.Vocab, token) {
+
 			break
 		}
 
 		// Convert token to piece
-		buf := make([]byte, 36)
+		buf := make([]byte, 256)
 		length := llama.TokenToPiece(g.model.Vocab, token, buf, 0, true)
 		if length > 0 {
 			result.Write(buf[:length])
@@ -133,7 +174,7 @@ func (g *Generator) Generate(ctx context.Context, prompt string, opts Generation
 	duration := time.Since(start)
 
 	return &GenerationResult{
-		Text:         result.String(),
+		Text:         trimStopStrings(result.String(), opts.Stop),
 		Tokens:       generated,
 		PromptTokens: len(tokens),
 		GenTokens:    len(generated),
@@ -144,6 +185,9 @@ func (g *Generator) Generate(ctx context.Context, prompt string, opts Generation
 
 // GenerateStream generates tokens asynchronously, sending each token through a channel.
 func (g *Generator) GenerateStream(ctx context.Context, prompt string, opts GenerationOptions) <-chan StreamChunk {
+	// Clear KV cache from any previous generation
+	g.clearKVCache()
+
 	ch := make(chan StreamChunk, 32) // buffered channel to avoid blocking
 
 	go func() {
@@ -184,7 +228,7 @@ func (g *Generator) GenerateStream(ctx context.Context, prompt string, opts Gene
 			}
 
 			// Convert token to piece
-			buf := make([]byte, 36)
+			buf := make([]byte, 256)
 			length := llama.TokenToPiece(g.model.Vocab, token, buf, 0, true)
 			tokenText := ""
 			if length > 0 {
@@ -210,9 +254,9 @@ func (g *Generator) GenerateStream(ctx context.Context, prompt string, opts Gene
 			batch = llama.BatchGetOne([]llama.Token{token})
 		}
 
-		// Send final chunk
+		// Send final chunk with stop strings trimmed
 		ch <- StreamChunk{
-			Text:  result.String(),
+			Text:  trimStopStrings(result.String(), opts.Stop),
 			Done:  true,
 			Token: "",
 		}
