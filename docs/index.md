@@ -2,6 +2,8 @@
 
 **guff Community Edition** -- a local LLM runtime with multi-provider routing, MCP tool integration, and dual API compatibility.
 
+Created by **John Soprych**, Chief Scientist at [Elko.AI](https://elko.ai).
+
 ## Overview
 
 guff runs GGUF models locally via llama.cpp (through yzma FFI bindings), routes requests to remote APIs (OpenAI, Anthropic, DeepSeek), and exposes both Ollama-compatible and OpenAI-compatible HTTP endpoints. GPU acceleration is automatic (CUDA, Metal, Vulkan).

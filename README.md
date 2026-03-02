@@ -231,6 +231,10 @@ make lint           # Lint with golangci-lint
 go test ./internal/tools -run TestRegistry   # Single test
 ```
 
+## Author
+
+Created by **John Soprych**, Chief Scientist at [Elko.AI](https://elko.ai), with assistance from The Dark Software Factory.
+
 ## License
 
 Apache 2.0
