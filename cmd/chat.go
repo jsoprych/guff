@@ -14,6 +14,7 @@ import (
 	"github.com/jsoprych/guff/internal/config"
 	"github.com/jsoprych/guff/internal/generate"
 	"github.com/jsoprych/guff/internal/model"
+	"github.com/jsoprych/guff/internal/tools"
 	"github.com/spf13/cobra"
 )
 
@@ -170,6 +171,45 @@ Press Ctrl+D or type '/exit' to quit.`,
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+
+		// Initialize MCP tools if enabled
+		registry := tools.NewRegistry()
+		toolsEnabled, _ := cmd.Flags().GetBool("tools")
+		if toolsEnabled && len(appConfig.MCP) > 0 {
+			var mcpClients []*tools.MCPClient
+			for name, mcpCfg := range appConfig.MCP {
+				serverCfg := tools.MCPServerConfig{
+					Name:    name,
+					Command: mcpCfg.Command,
+					Args:    mcpCfg.Args,
+					Env:     mcpCfg.Env,
+				}
+				client, err := tools.RegisterMCPTools(ctx, registry, serverCfg)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: MCP server %q failed: %v\n", name, err)
+					continue
+				}
+				mcpClients = append(mcpClients, client)
+			}
+			defer func() {
+				for _, c := range mcpClients {
+					c.Close()
+				}
+			}()
+			if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
+				if toolDefs := registry.List(); len(toolDefs) > 0 {
+					fmt.Fprintf(os.Stderr, "Discovered %d tool(s) from MCP servers\n", len(toolDefs))
+					for _, td := range toolDefs {
+						fmt.Fprintf(os.Stderr, "  - %s: %s\n", td.Name, td.Description)
+					}
+				}
+			}
+		}
+
+		// Inject tool descriptions into system prompt
+		if toolPrompt := registry.FormatForPrompt(); toolPrompt != "" {
+			system = system + "\n\n" + toolPrompt
+		}
 
 		// Initialize chat storage and session manager if persistence enabled
 		var sessionManager *chatsession.SessionManager
@@ -333,6 +373,34 @@ Press Ctrl+D or type '/exit' to quit.`,
 					os.Exit(1)
 				}
 				response = resp
+
+				// Tool call loop (max 5 iterations to prevent runaway)
+				for i := 0; i < 5; i++ {
+					call, prefixText, found := tools.ParseToolCall(response)
+					if !found {
+						break
+					}
+					if prefixText != "" {
+						fmt.Print(prefixText)
+					}
+					fmt.Fprintf(os.Stderr, "\n[calling tool: %s]\n", call.Name)
+
+					result := registry.Execute(ctx, *call)
+					if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
+						fmt.Fprintf(os.Stderr, "[tool result: %s]\n", truncateStr(result.Content, 200))
+					}
+
+					if err := sessionManager.AddMessage(ctx, sessionID, "tool", result.Content); err != nil {
+						fmt.Fprintf(os.Stderr, "Error saving tool result: %v\n", err)
+						break
+					}
+					resp, err = sessionManager.GenerateResponse(ctx, sessionID, generator, genOpts, false)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Generation error: %v\n", err)
+						break
+					}
+					response = resp
+				}
 			} else {
 				// Token-aware in-memory generation
 				tc := tokenizer.CountTokens(userInput)
@@ -360,6 +428,34 @@ Press Ctrl+D or type '/exit' to quit.`,
 					os.Exit(1)
 				}
 				response = strings.TrimSpace(result.Text)
+
+				// Tool call loop (max 5 iterations to prevent runaway)
+				for i := 0; i < 5; i++ {
+					call, prefixText, found := tools.ParseToolCall(response)
+					if !found {
+						break
+					}
+					if prefixText != "" {
+						fmt.Print(prefixText)
+					}
+					fmt.Fprintf(os.Stderr, "\n[calling tool: %s]\n", call.Name)
+
+					toolResult := registry.Execute(ctx, *call)
+					if verbose, _ := cmd.Flags().GetBool("verbose"); verbose {
+						fmt.Fprintf(os.Stderr, "[tool result: %s]\n", truncateStr(toolResult.Content, 200))
+					}
+
+					tc := tokenizer.CountTokens(toolResult.Content)
+					history = append(history, chatHistoryMsg{role: "tool", content: toolResult.Content, tokenCount: tc})
+
+					prompt = formatHistory(history)
+					result, err = generator.Generate(ctx, prompt, genOpts)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Generation error: %v\n", err)
+						break
+					}
+					response = strings.TrimSpace(result.Text)
+				}
 
 				// Add assistant response to history
 				respTc := tokenizer.CountTokens(response)
@@ -544,6 +640,14 @@ func printNoPersistStatus(history []chatHistoryMsg, contextWindow, maxGenTokens 
 	fmt.Printf("  Strategy: sliding_window (in-memory)\n")
 }
 
+// truncateStr truncates a string to maxLen characters, appending "..." if truncated.
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 func init() {
 	chatCmd.Flags().Int("max-tokens", 1024, "Maximum number of tokens to generate per response")
 	chatCmd.Flags().Float32("top-p", 0, "Top-p (nucleus) sampling threshold (0 = disabled)")
@@ -556,6 +660,7 @@ func init() {
 	chatCmd.Flags().String("session", "", "Session ID to resume (creates new if empty)")
 	chatCmd.Flags().Bool("no-persist", false, "Do not save chat history")
 	chatCmd.Flags().Bool("list-sessions", false, "List all saved sessions and exit")
+	chatCmd.Flags().Bool("tools", true, "Enable MCP tool discovery and execution")
 
 	rootCmd.AddCommand(chatCmd)
 }
