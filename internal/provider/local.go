@@ -114,7 +114,7 @@ func formatMessagesWithTemplate(loaded *model.LoadedModel, msgs []Message) strin
 	contents := make([][]byte, len(msgs))
 
 	for i, m := range msgs {
-		roles[i] = append([]byte(m.Role), 0)    // null-terminated
+		roles[i] = append([]byte(m.Role), 0) // null-terminated
 		contents[i] = append([]byte(m.Content), 0)
 		chatMsgs[i] = llama.ChatMessage{
 			Role:    &roles[i][0],
@@ -189,9 +189,9 @@ func formatMessages(msgs []Message) string {
 // toGenOpts converts a ChatRequest to generate.GenerationOptions.
 func toGenOpts(req ChatRequest) generate.GenerationOptions {
 	opts := generate.GenerationOptions{
-		MaxTokens:    req.MaxTokens,
-		Stop:         req.Stop,
-		Stream:       req.Stream,
+		MaxTokens:     req.MaxTokens,
+		Stop:          req.Stop,
+		Stream:        req.Stream,
 		RepeatPenalty: 1.1,
 	}
 	if opts.MaxTokens == 0 {

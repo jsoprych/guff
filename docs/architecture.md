@@ -141,7 +141,7 @@ Chi-based router with middleware (request ID, logging, recovery, timeout).
 | Ollama | `GET /api/tags` | `handleListModels` |
 | Ollama | `POST /api/generate` | `handleGenerate` (streaming + non-streaming) |
 | Ollama | `POST /api/chat` | `handleChat` (streaming + non-streaming) |
-| Ollama | `POST /api/pull` | `handlePullModel` (TODO) |
+| Ollama | `POST /api/pull` | `handlePullModel` (streaming NDJSON progress) |
 | OpenAI | `POST /v1/chat/completions` | `handleV1ChatCompletions` |
 | OpenAI | `POST /v1/completions` | `handleV1Completions` |
 | OpenAI | `POST /v1/embeddings` | `handleV1Embeddings` |
@@ -218,6 +218,23 @@ sequenceDiagram
     P-->>API: ChatResponse
     API-->>Client: OAIChatResponse (JSON or SSE stream)
 ```
+
+## Naming Conventions & Adapter Pattern
+
+Go interfaces are the canonical contract. MCP tools, HTTP routes, and CLI commands are mechanical projections:
+
+```
+Go method:    {Interface}.{Verb}{Noun}    PascalCase    MemoryProvider.Search
+MCP tool:     {ns}_{verb}                 snake_case    memory_search
+HTTP route:   /{ns}/{verb}                REST          POST /memory/search
+CLI command:  guff {ns} {verb}            kebab-case    guff memory search
+```
+
+The `internal/adapter/` package provides generic Go→MCP bridging via `Wrap[A, R]()` and `WrapVoid[A]()` generics, with `ToolName()` for conventional name construction and `RegisterAll()` for batch registration into `tools.Registry`.
+
+Existing `/v1/*`, `/api/*` routes and `pull/run/chat/serve` CLI commands are grandfathered.
+
+See [Naming Conventions](naming-conventions.md) for the full projection table, namespace mapping, and rules.
 
 ## Thread Safety
 

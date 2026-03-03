@@ -66,7 +66,9 @@ func newTestRegistry() *tools.Registry {
 		Description: "Echoes back the input",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}}}`),
 	}, func(_ context.Context, args json.RawMessage) (string, error) {
-		var a struct{ Text string `json:"text"` }
+		var a struct {
+			Text string `json:"text"`
+		}
 		json.Unmarshal(args, &a)
 		return "echo: " + a.Text, nil
 	})

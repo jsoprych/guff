@@ -16,25 +16,25 @@ import (
 // OpenAI-compatible request/response types
 
 type OAIChatRequest struct {
-	Model            string         `json:"model"`
-	Messages         []OAIMessage   `json:"messages"`
-	Temperature      *float32       `json:"temperature,omitempty"`
-	TopP             *float32       `json:"top_p,omitempty"`
-	TopK             *int           `json:"top_k,omitempty"`
-	MinP             *float32       `json:"min_p,omitempty"`
-	MaxTokens        *int           `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int        `json:"max_completion_tokens,omitempty"`
-	Stop             interface{}    `json:"stop,omitempty"` // string or []string
-	Stream           bool           `json:"stream,omitempty"`
-	Seed             *int           `json:"seed,omitempty"`
-	N                int            `json:"n,omitempty"`
+	Model               string       `json:"model"`
+	Messages            []OAIMessage `json:"messages"`
+	Temperature         *float32     `json:"temperature,omitempty"`
+	TopP                *float32     `json:"top_p,omitempty"`
+	TopK                *int         `json:"top_k,omitempty"`
+	MinP                *float32     `json:"min_p,omitempty"`
+	MaxTokens           *int         `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int         `json:"max_completion_tokens,omitempty"`
+	Stop                interface{}  `json:"stop,omitempty"` // string or []string
+	Stream              bool         `json:"stream,omitempty"`
+	Seed                *int         `json:"seed,omitempty"`
+	N                   int          `json:"n,omitempty"`
 
 	// Extended sampler parameters (passed through to local provider)
-	Grammar       string                `json:"grammar,omitempty"`
-	LogitBias     map[string]float32    `json:"logit_bias,omitempty"` // OAI uses string keys
-	TypicalP      *float32              `json:"typical_p,omitempty"`
-	TopNSigma     *float32              `json:"top_n_sigma,omitempty"`
-	DryMultiplier *float32              `json:"dry_multiplier,omitempty"`
+	Grammar       string             `json:"grammar,omitempty"`
+	LogitBias     map[string]float32 `json:"logit_bias,omitempty"` // OAI uses string keys
+	TypicalP      *float32           `json:"typical_p,omitempty"`
+	TopNSigma     *float32           `json:"top_n_sigma,omitempty"`
+	DryMultiplier *float32           `json:"dry_multiplier,omitempty"`
 }
 
 type OAIMessage struct {
@@ -43,19 +43,19 @@ type OAIMessage struct {
 }
 
 type OAIChatResponse struct {
-	ID      string       `json:"id"`
-	Object  string       `json:"object"`
-	Created int64        `json:"created"`
-	Model   string       `json:"model"`
-	Choices []OAIChoice  `json:"choices"`
-	Usage   OAIUsage     `json:"usage"`
+	ID      string      `json:"id"`
+	Object  string      `json:"object"`
+	Created int64       `json:"created"`
+	Model   string      `json:"model"`
+	Choices []OAIChoice `json:"choices"`
+	Usage   OAIUsage    `json:"usage"`
 }
 
 type OAIChoice struct {
-	Index        int        `json:"index"`
-	Message      OAIMessage `json:"message,omitempty"`
+	Index        int         `json:"index"`
+	Message      OAIMessage  `json:"message,omitempty"`
 	Delta        *OAIMessage `json:"delta,omitempty"`
-	FinishReason *string    `json:"finish_reason"`
+	FinishReason *string     `json:"finish_reason"`
 }
 
 type OAIUsage struct {
@@ -65,8 +65,8 @@ type OAIUsage struct {
 }
 
 type OAIModelList struct {
-	Object string       `json:"object"`
-	Data   []OAIModel   `json:"data"`
+	Object string     `json:"object"`
+	Data   []OAIModel `json:"data"`
 }
 
 type OAIModel struct {
@@ -77,23 +77,23 @@ type OAIModel struct {
 }
 
 type OAICompletionRequest struct {
-	Model       string   `json:"model"`
-	Prompt      string   `json:"prompt"`
-	MaxTokens   *int     `json:"max_tokens,omitempty"`
-	Temperature *float32 `json:"temperature,omitempty"`
-	TopP        *float32 `json:"top_p,omitempty"`
+	Model       string      `json:"model"`
+	Prompt      string      `json:"prompt"`
+	MaxTokens   *int        `json:"max_tokens,omitempty"`
+	Temperature *float32    `json:"temperature,omitempty"`
+	TopP        *float32    `json:"top_p,omitempty"`
 	Stop        interface{} `json:"stop,omitempty"`
-	Stream      bool     `json:"stream,omitempty"`
-	Seed        *int     `json:"seed,omitempty"`
+	Stream      bool        `json:"stream,omitempty"`
+	Seed        *int        `json:"seed,omitempty"`
 }
 
 type OAICompletionResponse struct {
-	ID      string              `json:"id"`
-	Object  string              `json:"object"`
-	Created int64               `json:"created"`
-	Model   string              `json:"model"`
+	ID      string                `json:"id"`
+	Object  string                `json:"object"`
+	Created int64                 `json:"created"`
+	Model   string                `json:"model"`
 	Choices []OAICompletionChoice `json:"choices"`
-	Usage   OAIUsage            `json:"usage"`
+	Usage   OAIUsage              `json:"usage"`
 }
 
 type OAICompletionChoice struct {

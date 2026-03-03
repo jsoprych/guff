@@ -252,7 +252,33 @@ Chat completion with message history.
 
 ### POST /api/pull
 
-Download a model. **Not yet implemented** (returns 501).
+Download a model from Hugging Face. Streams NDJSON progress by default.
+
+**Request:**
+```json
+{
+  "name": "tinyllama",
+  "quantization": "q4_k_m",
+  "stream": true
+}
+```
+
+`quantization` defaults to `q4_k_m`. `stream` defaults to `true`.
+
+**Streaming response** (one JSON object per line):
+```
+{"status":"downloading","completed":1048576,"total":4294967296}
+{"status":"downloading","completed":2097152,"total":4294967296}
+...
+{"status":"success"}
+```
+
+On error:
+```json
+{"error": "unknown model: foo"}
+```
+
+**Non-streaming** (`"stream": false`): returns `{"status":"success"}` or `{"error":"..."}` as a single JSON object.
 
 ## Dashboard & UI
 
@@ -303,6 +329,12 @@ Returns `guff API server` (plain text).
 ```json
 {"status": "ok"}
 ```
+
+## Route Naming Convention
+
+The existing `/v1/*` (OpenAI) and `/api/*` (Ollama/dashboard) routes are **grandfathered** -- they predate the naming convention and will never be removed or renamed.
+
+New endpoints follow the `/{namespace}/{verb}` convention derived from Go interface methods. For example, memory operations use `/memory/store`, `/memory/search`, etc. See [Naming Conventions](naming-conventions.md) for full details.
 
 ## Error Responses
 

@@ -49,14 +49,14 @@ func (p *OpenAIProvider) Name() string { return p.name }
 // OpenAI request/response types (internal)
 
 type openAIRequest struct {
-	Model       string            `json:"model"`
-	Messages    []openAIMessage   `json:"messages"`
-	Temperature *float32          `json:"temperature,omitempty"`
-	TopP        *float32          `json:"top_p,omitempty"`
-	MaxTokens   int               `json:"max_tokens,omitempty"`
-	Stop        []string          `json:"stop,omitempty"`
-	Seed        *int              `json:"seed,omitempty"`
-	Stream      bool              `json:"stream,omitempty"`
+	Model       string          `json:"model"`
+	Messages    []openAIMessage `json:"messages"`
+	Temperature *float32        `json:"temperature,omitempty"`
+	TopP        *float32        `json:"top_p,omitempty"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+	Stop        []string        `json:"stop,omitempty"`
+	Seed        *int            `json:"seed,omitempty"`
+	Stream      bool            `json:"stream,omitempty"`
 }
 
 type openAIMessage struct {
@@ -267,7 +267,7 @@ type openAIEmbeddingRequest struct {
 }
 
 type openAIEmbeddingResponse struct {
-	Data  []struct {
+	Data []struct {
 		Embedding []float32 `json:"embedding"`
 		Index     int       `json:"index"`
 	} `json:"data"`

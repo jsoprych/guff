@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -192,8 +193,14 @@ func (s *SQLiteStorage) ListSessions(ctx context.Context, userID string, limit, 
 
 // AddMessage implements Storage.AddMessage.
 func (s *SQLiteStorage) AddMessage(ctx context.Context, message *Message) error {
-	// JSON tool_calls will be stored as text; we'll handle marshaling separately
-	toolCallsJSON := "" // TODO: implement JSON marshaling
+	toolCallsJSON := ""
+	if len(message.ToolCalls) > 0 {
+		b, err := json.Marshal(message.ToolCalls)
+		if err != nil {
+			return fmt.Errorf("marshal tool_calls: %w", err)
+		}
+		toolCallsJSON = string(b)
+	}
 	query := `INSERT INTO messages (id, session_id, role, content, tool_calls, created_at, token_count)
 	          VALUES (?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.ExecContext(ctx, query,
@@ -232,7 +239,11 @@ func (s *SQLiteStorage) GetMessage(ctx context.Context, id string) (*Message, er
 		return nil, err
 	}
 	msg.Role = MessageRole(roleStr)
-	// TODO: unmarshal toolCallsJSON
+	if toolCallsJSON != "" {
+		if err := json.Unmarshal([]byte(toolCallsJSON), &msg.ToolCalls); err != nil {
+			return nil, fmt.Errorf("unmarshal tool_calls: %w", err)
+		}
+	}
 	return &msg, nil
 }
 
@@ -271,7 +282,11 @@ func (s *SQLiteStorage) GetMessages(ctx context.Context, sessionID string, limit
 			return nil, err
 		}
 		msg.Role = MessageRole(roleStr)
-		// TODO: unmarshal toolCallsJSON
+		if toolCallsJSON != "" {
+			if err := json.Unmarshal([]byte(toolCallsJSON), &msg.ToolCalls); err != nil {
+				return nil, fmt.Errorf("unmarshal tool_calls: %w", err)
+			}
+		}
 		messages = append(messages, &msg)
 	}
 	return messages, rows.Err()
@@ -279,7 +294,14 @@ func (s *SQLiteStorage) GetMessages(ctx context.Context, sessionID string, limit
 
 // UpdateMessage implements Storage.UpdateMessage.
 func (s *SQLiteStorage) UpdateMessage(ctx context.Context, message *Message) error {
-	toolCallsJSON := "" // TODO: implement JSON marshaling
+	toolCallsJSON := ""
+	if len(message.ToolCalls) > 0 {
+		b, err := json.Marshal(message.ToolCalls)
+		if err != nil {
+			return fmt.Errorf("marshal tool_calls: %w", err)
+		}
+		toolCallsJSON = string(b)
+	}
 	query := `UPDATE messages SET role = ?, content = ?, tool_calls = ?, token_count = ?
 	          WHERE id = ?`
 	_, err := s.db.ExecContext(ctx, query,

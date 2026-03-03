@@ -166,8 +166,59 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePullModel(w http.ResponseWriter, r *http.Request) {
-	// TODO: implement
-	http.Error(w, "Not implemented", http.StatusNotImplemented)
+	var req struct {
+		Name         string `json:"name"`
+		Quantization string `json:"quantization,omitempty"`
+		Stream       *bool  `json:"stream,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, "model name required", http.StatusBadRequest)
+		return
+	}
+	quant := req.Quantization
+	if quant == "" {
+		quant = "q4_k_m"
+	}
+
+	stream := req.Stream == nil || *req.Stream // default true
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	flusher, canFlush := w.(http.Flusher)
+
+	writeJSON := func(v interface{}) {
+		data, _ := json.Marshal(v)
+		_, _ = w.Write(data)
+		_, _ = w.Write([]byte("\n"))
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+
+	opts := model.PullOptions{
+		Quantization: quant,
+	}
+	if stream {
+		opts.Progress = func(downloaded, total int64) {
+			if total == 0 {
+				total = downloaded
+			}
+			writeJSON(map[string]interface{}{
+				"status":    "downloading",
+				"completed": downloaded,
+				"total":     total,
+			})
+		}
+	}
+
+	if err := s.model.Pull(r.Context(), req.Name, opts); err != nil {
+		writeJSON(map[string]interface{}{"error": err.Error()})
+		return
+	}
+	writeJSON(map[string]interface{}{"status": "success"})
 }
 
 func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {

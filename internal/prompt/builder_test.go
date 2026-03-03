@@ -123,7 +123,7 @@ func TestBuilderEmptySections(t *testing.T) {
 		Sections: []Section{
 			{Type: SectionBase, Content: "Base"},
 			{Type: SectionProject, Auto: true}, // won't find anything
-			{Type: SectionUser, Content: ""},    // empty
+			{Type: SectionUser, Content: ""},   // empty
 		},
 	}
 	b := NewBuilder(cfg, "", "/nonexistent")

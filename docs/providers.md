@@ -182,6 +182,18 @@ providers:
 
 Never put raw API keys in config files. Use environment variables.
 
+## Namespace Mapping
+
+The `Provider` interface maps to the `provider` namespace in guff's naming convention. Provider methods project to MCP tools and HTTP routes as:
+
+| Go Method | MCP Tool | HTTP Route |
+|-----------|----------|------------|
+| `ChatCompletion()` | `provider_chat` | `POST /provider/chat` |
+| `ChatCompletionStream()` | `provider_chat_stream` | `POST /provider/chat-stream` |
+| `ListModels()` | `provider_list_models` | `GET /provider/list-models` |
+
+See [Naming Conventions](naming-conventions.md) for the full projection rules across all interfaces.
+
 ## Adding a New Provider
 
 To add support for a new API:

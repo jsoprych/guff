@@ -53,9 +53,9 @@ Local models produce tool calls via text output (JSON in markdown blocks). Witho
 
 ## API Server
 
-### `/api/pull` Not Implemented
+### ~~`/api/pull` Not Implemented~~ (FIXED)
 
-The Ollama-compatible pull endpoint returns 501. Model downloads must be done via `guff pull` CLI.
+`POST /api/pull` is now implemented. It streams NDJSON download progress and maps to the same HuggingFace downloader used by `guff pull`.
 
 ### No Authentication
 

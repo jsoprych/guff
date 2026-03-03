@@ -28,15 +28,20 @@ guff chat
 guff serve
 ```
 
+**New to guff?** Start with the [Quick-Start How-Tos](quickstart.md) -- twelve hands-on walkthroughs from first prompt to autonomous financial chart generation.
+
 ## Documentation Index
 
 | Document | Description |
 |----------|-------------|
+| [Quick-Start How-Tos](quickstart.md) | 12 hands-on walkthroughs, from first prompt to financial charts |
 | [Architecture](architecture.md) | System design, package structure, data flow |
 | [Configuration](configuration.md) | Full config reference (`config.yaml`, env vars, CLI flags) |
 | [Providers](providers.md) | Provider routing, setup for OpenAI/Anthropic/DeepSeek/custom |
 | [MCP & Tools](mcp-tools.md) | MCP server integration, tool registry, function calling |
 | [Context Management](context-management.md) | Context strategies, token budgets, status display |
+| [Naming Conventions](naming-conventions.md) | Go→MCP→HTTP→CLI naming rules, adapter pattern |
+| [Memory Deep-Dive](memory-deep-dive.md) | Memory architecture, plugin tiers, MCP memory interface |
 | [Prompt Builder](prompt-builder.md) | Multi-part system prompts, auto-discovery, per-model overrides |
 | [API Reference](api-reference.md) | OpenAI + Ollama endpoint specifications |
 | [Sampling](sampling.md) | Sampler chain, parameters, tuning guide |

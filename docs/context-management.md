@@ -171,6 +171,21 @@ When running with `--no-persist`, context management works in-memory:
 
 The in-memory path uses `slidingWindowTruncate()` in `cmd/chat.go` which mirrors the `SlidingWindowStrategy` logic without SQLite.
 
+## Namespace Mapping
+
+The `ContextManager` interface maps to the `context` namespace in guff's naming convention:
+
+| Go Method | MCP Tool | HTTP Route |
+|-----------|----------|------------|
+| `AddMessage()` | `context_add_message` | `POST /context/add-message` |
+| `GetContext()` | `context_get` | `GET /context/get` |
+| `ClearContext()` | `context_clear` | `POST /context/clear` |
+| `TokenCount()` | `context_token_count` | `GET /context/token-count` |
+| `SetStrategy()` | `context_set_strategy` | `POST /context/set-strategy` |
+| `GetStatus()` | `context_status` | `GET /context/status` |
+
+See [Naming Conventions](naming-conventions.md) for full details.
+
 ## Chat Commands
 
 | Command | Description |

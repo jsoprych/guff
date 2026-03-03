@@ -55,13 +55,13 @@ type ModelManager struct {
 
 // LoadedModel represents an actively loaded model
 type LoadedModel struct {
-	Model         llama.Model
-	Ctx           llama.Context
-	Vocab         llama.Vocab
-	Info          *ModelInfo
-	LoadedAt      time.Time
-	LastUsed      time.Time
-	mu            sync.Mutex
+	Model    llama.Model
+	Ctx      llama.Context
+	Vocab    llama.Vocab
+	Info     *ModelInfo
+	LoadedAt time.Time
+	LastUsed time.Time
+	mu       sync.Mutex
 
 	// Metadata read from the model after loading
 	NCtxTrain      int    // context window size from training
@@ -74,8 +74,8 @@ type LoadedModel struct {
 	ChatTemplate   string // chat template from GGUF metadata
 
 	// LoRA adapter (nil if none loaded)
-	LoraAdapter    llama.AdapterLora
-	loraLoaded     bool
+	LoraAdapter llama.AdapterLora
+	loraLoaded  bool
 }
 
 // GetMetadata returns a model metadata value by key. Returns empty string if not found.
@@ -480,10 +480,26 @@ func (m *ModelManager) updateModelInfo(name, path, quantization string) error {
 	return nil
 }
 
-// Delete removes a model
+// Delete removes a model from the registry and deletes its file.
 func (m *ModelManager) Delete(name string) error {
-	// TODO: implement deletion
-	return ErrNotImplemented
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	info, ok := m.registry[name]
+	if !ok {
+		return ErrModelNotFound
+	}
+	if m.current != nil && m.current.Info.Name == name {
+		return fmt.Errorf("cannot delete model %q: currently loaded", name)
+	}
+	if err := os.Remove(info.Path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete model file: %w", err)
+	}
+	// Remove parent directory if now empty
+	_ = os.Remove(filepath.Dir(info.Path))
+
+	delete(m.registry, name)
+	return nil
 }
 
 // CreateFromModelfile creates a model from a Modelfile

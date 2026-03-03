@@ -12,9 +12,9 @@ import (
 // explicitly in the model routing table.
 type Router struct {
 	mu        sync.RWMutex
-	providers map[string]Provider           // provider name -> Provider
-	routes    map[string]routeEntry         // model alias -> route
-	fallback  Provider                      // default provider (usually local)
+	providers map[string]Provider   // provider name -> Provider
+	routes    map[string]routeEntry // model alias -> route
+	fallback  Provider              // default provider (usually local)
 }
 
 type routeEntry struct {

@@ -25,15 +25,15 @@ type GenerationOptions struct {
 	Stream           bool
 
 	// Extended samplers
-	TypicalP      float32            // SamplerInitTypical — 0 = disabled
-	TopNSigma     float32            // SamplerInitTopNSigma — 0 = disabled
-	DryMultiplier float32            // SamplerInitDry — 0 = disabled
-	DryBase       float32            // DRY base (default 1.75)
-	DryAllowedLen int32              // DRY allowed length
+	TypicalP       float32           // SamplerInitTypical — 0 = disabled
+	TopNSigma      float32           // SamplerInitTopNSigma — 0 = disabled
+	DryMultiplier  float32           // SamplerInitDry — 0 = disabled
+	DryBase        float32           // DRY base (default 1.75)
+	DryAllowedLen  int32             // DRY allowed length
 	DryPenaltyLast int32             // DRY penalty lookback
-	XtcP          float32            // SamplerInitXTC probability — 0 = disabled
-	XtcT          float32            // SamplerInitXTC threshold
-	LogitBias     map[int32]float32  // SamplerInitLogitBias — nil = disabled
+	XtcP           float32           // SamplerInitXTC probability — 0 = disabled
+	XtcT           float32           // SamplerInitXTC threshold
+	LogitBias      map[int32]float32 // SamplerInitLogitBias — nil = disabled
 }
 
 // createSamplerChain creates a sampler chain based on generation options.
@@ -131,14 +131,14 @@ func createSamplerChain(opts GenerationOptions, vocab llama.Vocab) llama.Sampler
 }
 
 type GenerationResult struct {
-	Text            string
-	Tokens          []llama.Token
-	PromptTokens    int
-	GenTokens       int
-	Duration        time.Duration
-	PromptEvalTime  time.Duration
-	TokenGenTime    time.Duration
-	Done            bool
+	Text           string
+	Tokens         []llama.Token
+	PromptTokens   int
+	GenTokens      int
+	Duration       time.Duration
+	PromptEvalTime time.Duration
+	TokenGenTime   time.Duration
+	Done           bool
 }
 
 type StreamChunk struct {

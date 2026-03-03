@@ -187,6 +187,22 @@ guff implements the MCP stdio transport:
 
 Each request gets a unique incrementing ID. Responses are matched by ID. Notifications (no ID field) are fire-and-forget.
 
+## Naming Convention
+
+Guff-native tools follow the `{namespace}_{verb}` naming convention derived from Go interface methods. See [Naming Conventions](naming-conventions.md) for the full rules.
+
+```
+# Guff-native tools — follow the convention
+memory_store, memory_search, session_list, context_status
+
+# External MCP tools — keep upstream names
+filesystem_list, filesystem_read, github_create_issue
+```
+
+External tools from third-party MCP servers keep whatever names their servers define. The convention applies only to tools that project guff's own Go interfaces.
+
+The `internal/adapter/` package provides `Wrap[A, R]()` and `WrapVoid[A]()` generics to create type-safe MCP tool handlers from Go functions. `RegisterAll()` batch-registers them into the existing `tools.Registry`.
+
 ## Current Limitations
 
 - **Stdio only** -- no HTTP/WebSocket MCP transport yet
