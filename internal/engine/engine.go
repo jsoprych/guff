@@ -15,14 +15,17 @@ type ChatEngine struct {
 	router        *provider.Router
 	registry      *tools.Registry
 	maxToolRounds int
+	isLocal       func(string) bool // defaults to router.IsLocal; overridable in tests
 }
 
 // New creates a ChatEngine backed by the given provider router.
 func New(router *provider.Router) *ChatEngine {
-	return &ChatEngine{
+	e := &ChatEngine{
 		router:        router,
 		maxToolRounds: 5,
 	}
+	e.isLocal = router.IsLocal
+	return e
 }
 
 // SetToolRegistry attaches a tool registry. When set, the engine will inject
@@ -50,10 +53,20 @@ func (e *ChatEngine) ChatCompletion(ctx context.Context, req provider.ChatReques
 		}
 	}
 
+	// Grammar-constrained tool calling: force valid JSON output for local models.
+	// Only active when: tools are registered, model is local, caller hasn't set grammar.
+	// Cleared before re-calls so the model can respond naturally after tool execution.
+	if e.registry != nil && req.Grammar == "" {
+		if g := tools.ToolGrammar(e.registry.List()); g != "" && e.isLocal(req.Model) {
+			req.Grammar = g
+		}
+	}
+
 	resp, err := e.router.ChatCompletion(ctx, req)
 	if err != nil {
 		return nil, err
 	}
+	req.Grammar = "" // allow natural response on re-calls after tool execution
 
 	// Tool call loop
 	if e.registry != nil {
@@ -126,10 +139,20 @@ func (e *ChatEngine) ChatCompletionWithToolCallback(
 		}
 	}
 
+	// Grammar-constrained tool calling: force valid JSON output for local models.
+	// Only active when: tools are registered, model is local, caller hasn't set grammar.
+	// Cleared before re-calls so the model can respond naturally after tool execution.
+	if e.registry != nil && req.Grammar == "" {
+		if g := tools.ToolGrammar(e.registry.List()); g != "" && e.isLocal(req.Model) {
+			req.Grammar = g
+		}
+	}
+
 	resp, err := e.router.ChatCompletion(ctx, req)
 	if err != nil {
 		return nil, err
 	}
+	req.Grammar = "" // allow natural response on re-calls after tool execution
 
 	// Tool call loop
 	if e.registry != nil {

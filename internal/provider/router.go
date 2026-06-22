@@ -87,6 +87,17 @@ func (r *Router) Resolve(model string) (Provider, string, error) {
 	return nil, "", fmt.Errorf("%w: no provider for model %q", ErrProviderNotFound, model)
 }
 
+// IsLocal reports whether the model resolves to the LocalProvider (llama.cpp).
+// Used by the engine to decide whether grammar injection applies.
+func (r *Router) IsLocal(model string) bool {
+	p, _, err := r.Resolve(model)
+	if err != nil {
+		return false
+	}
+	_, ok := p.(*LocalProvider)
+	return ok
+}
+
 // ChatCompletion routes a request to the appropriate provider.
 func (r *Router) ChatCompletion(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	p, modelName, err := r.Resolve(req.Model)

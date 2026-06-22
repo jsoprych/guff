@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jsoprych/guff/internal/provider"
@@ -299,6 +300,84 @@ func TestChatCompletionStream_Passthrough(t *testing.T) {
 	}
 	if !chunks[1].Done {
 		t.Error("last chunk should be done")
+	}
+}
+
+func TestChatCompletion_GrammarInjectedForLocal(t *testing.T) {
+	toolCallJSON := `{"tool": "echo", "arguments": {"text": "hi"}}`
+	mock := &mockProvider{
+		responses: []*provider.ChatResponse{
+			{Model: "test", Message: provider.Message{Role: "assistant", Content: toolCallJSON}},
+			{Model: "test", Message: provider.Message{Role: "assistant", Content: "done"}, Done: true},
+		},
+	}
+	eng := New(newMockRouter(mock))
+	eng.SetToolRegistry(newTestRegistry())
+	eng.isLocal = func(string) bool { return true } // simulate local provider
+
+	_, err := eng.ChatCompletion(context.Background(), provider.ChatRequest{
+		Model:    "test",
+		Messages: []provider.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.callCount < 2 {
+		t.Fatalf("expected at least 2 calls, got %d", mock.callCount)
+	}
+	// First call should have grammar injected
+	if !strings.Contains(mock.lastReqs[0].Grammar, "tool-name") {
+		t.Errorf("first req grammar missing tool-name rule; grammar=%q", mock.lastReqs[0].Grammar)
+	}
+	// Second call (re-call) should have grammar cleared
+	if mock.lastReqs[1].Grammar != "" {
+		t.Errorf("second req grammar should be empty, got %q", mock.lastReqs[1].Grammar)
+	}
+}
+
+func TestChatCompletion_UserGrammarNotOverridden(t *testing.T) {
+	mock := &mockProvider{
+		responses: []*provider.ChatResponse{
+			{Model: "test", Message: provider.Message{Role: "assistant", Content: "yes"}, Done: true},
+		},
+	}
+	eng := New(newMockRouter(mock))
+	eng.SetToolRegistry(newTestRegistry())
+	eng.isLocal = func(string) bool { return true }
+
+	userGrammar := `root ::= "yes" | "no"`
+	_, err := eng.ChatCompletion(context.Background(), provider.ChatRequest{
+		Model:    "test",
+		Messages: []provider.Message{{Role: "user", Content: "hi"}},
+		Grammar:  userGrammar,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.lastReqs[0].Grammar != userGrammar {
+		t.Errorf("user grammar overridden; got %q, want %q", mock.lastReqs[0].Grammar, userGrammar)
+	}
+}
+
+func TestChatCompletion_NoGrammarForRemote(t *testing.T) {
+	mock := &mockProvider{
+		responses: []*provider.ChatResponse{
+			{Model: "test", Message: provider.Message{Role: "assistant", Content: "hello"}, Done: true},
+		},
+	}
+	// Default isLocal = router.IsLocal; mockProvider is not *LocalProvider → false
+	eng := New(newMockRouter(mock))
+	eng.SetToolRegistry(newTestRegistry())
+
+	_, err := eng.ChatCompletion(context.Background(), provider.ChatRequest{
+		Model:    "test",
+		Messages: []provider.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.lastReqs[0].Grammar != "" {
+		t.Errorf("remote model should have no grammar; got %q", mock.lastReqs[0].Grammar)
 	}
 }
 

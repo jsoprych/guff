@@ -44,3 +44,5 @@ CLAUDE.md
 .codeium/
 .windsurf/
 .amp/
+# Compiled MCP sub-tool binary (build output, keep source)
+/mcp/yfinance/yfinance
